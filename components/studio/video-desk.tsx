@@ -1,15 +1,29 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Download, Loader2 } from "lucide-react";
 import { formatUsd } from "@/lib/money";
 import { estimateVideoCost } from "@/lib/pricing";
-import { DEFAULT_VIDEO_MODEL, VIDEO_MODELS, defaultDuration, durationsFor, videoSpec } from "@/lib/video-models";
+import {
+  DEFAULT_VIDEO_MODEL,
+  VIDEO_MODELS,
+  VIDEO_PIXEL_SIZE,
+  defaultDuration,
+  durationsFor,
+  videoSpec,
+} from "@/lib/video-models";
 import type { VideoModelId } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Segmented, SettingRow, Stage, StageCopy, StageSweep, formatPixels, ratioOf } from "./stage";
 
 type VideoDeskProps = {
   userId: string;
@@ -50,17 +64,28 @@ type MockResponse = {
 
 const POLL_MS = 1000;
 
+/** MiniMax H3 variants share one price table shape; listing them as their own group keeps the 17-model menu scannable. */
+const MODEL_GROUPS: { label: string; ids: VideoModelId[] }[] = [
+  { label: "独立模型", ids: VIDEO_MODELS.filter((item) => !item.id.startsWith("minimax-h3-")).map((item) => item.id) },
+  { label: "MiniMax H3 base", ids: VIDEO_MODELS.filter((item) => item.id.startsWith("minimax-h3-base-")).map((item) => item.id) },
+  { label: "MiniMax H3 cinematic", ids: VIDEO_MODELS.filter((item) => item.id.startsWith("minimax-h3-cinematic-")).map((item) => item.id) },
+  { label: "MiniMax H3 origin", ids: VIDEO_MODELS.filter((item) => item.id.startsWith("minimax-h3-origin-")).map((item) => item.id) },
+];
+
 export function VideoDesk(props: VideoDeskProps) {
   const storageKey = `jax.video.mock.v1:${props.userId}`;
+  const stageRef = useRef<HTMLDivElement>(null);
   const [model, setModel] = useState<VideoModelId>(DEFAULT_VIDEO_MODEL);
   const [duration, setDuration] = useState(defaultDuration(DEFAULT_VIDEO_MODEL));
   const [prompt, setPrompt] = useState("傍晚的河面，一盏船灯慢慢靠近。");
   const [task, setTask] = useState<SavedTask | null>(null);
-  const [note, setNote] = useState("本地模拟。未连接上游，不会改动账户余额。");
+  const [note, setNote] = useState("本地演示，未连接上游，不会改动账户余额。");
   const [polling, setPolling] = useState(false);
-  const [tab, setTab] = useState("compose");
   const spec = videoSpec(model);
   const estimate = useMemo(() => estimateVideoCost({ model, duration }), [duration, model]);
+  const running = Boolean(task && !isTerminal(task.status));
+  const canSubmit = props.enabled && Boolean(estimate) && Boolean(prompt.trim()) && !running;
+  const pixels = spec ? VIDEO_PIXEL_SIZE[spec.resolution] : VIDEO_PIXEL_SIZE["720p"];
 
   useEffect(() => {
     const allowed = durationsFor(model);
@@ -99,7 +124,7 @@ export function VideoDesk(props: VideoDeskProps) {
             current
               ? {
                   ...current,
-                  error: body.code === "missing" ? "这次进程里已经没有该模拟任务，没有重新提交。" : "查询被拒绝。",
+                  error: body.code === "missing" ? "这次进程里已经没有该演示任务，没有重新提交。" : "查询被拒绝。",
                 }
               : current,
           );
@@ -121,8 +146,14 @@ export function VideoDesk(props: VideoDeskProps) {
     };
   }, [polling, props.userId, taskId]);
 
+  function revealStage() {
+    if (window.matchMedia("(min-width: 1024px)").matches) return;
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    stageRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  }
+
   async function submit() {
-    if (!props.enabled || !estimate || !prompt.trim() || (task && !isTerminal(task.status))) return;
+    if (!canSubmit || !estimate) return;
     const idempotencyKey = crypto.randomUUID();
     const pending: SavedTask = {
       idempotencyKey,
@@ -135,7 +166,7 @@ export function VideoDesk(props: VideoDeskProps) {
       mockBalance: null,
     };
     setTask(pending);
-    setTab("result");
+    revealStage();
     try {
       const response = await fetch(appPath("/api/mock/videos"), {
         method: "POST",
@@ -160,122 +191,200 @@ export function VideoDesk(props: VideoDeskProps) {
       setTask(applyTask(pending, body, props.userId));
       if (!isTerminal(body.task.status)) setPolling(true);
     } catch {
-      setTask({ ...pending, status: "failed", error: "模拟服务没有收下这次提交。没有向中转站重试。" });
+      setTask({ ...pending, status: "failed", error: "演示服务没有收下这次提交。没有向中转站重试。" });
     }
   }
 
   const contentUrl = task?.id && task.status === "completed" ? task.contentUrl : undefined;
+  const taskSpec = task ? videoSpec(task.model) : undefined;
+  const stageRatio = ratioOf(taskSpec ? VIDEO_PIXEL_SIZE[taskSpec.resolution] : pixels, 16 / 9);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b px-3 py-2 lg:hidden">
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="history">任务</TabsTrigger>
-            <TabsTrigger value="compose">视频</TabsTrigger>
-            <TabsTrigger value="result">播放</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
-    <div className="grid min-h-0 flex-1 lg:grid-cols-[280px_minmax(0,1fr)_minmax(320px,380px)]">
-      <section className={pane(tab === "history")}>
-        <div className="px-4 py-3">
-          <h2 className="text-sm font-medium">视频任务</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">只保存在这台浏览器和这次本地进程里。</p>
-        </div>
-        <div className="px-3 pb-4">
-          {task ? (
-            <button type="button" className="w-full rounded-xl border bg-card/50 p-3 text-left" onClick={() => setTab("result")}>
-              <span className="line-clamp-2 text-sm">{task.prompt}</span>
-              <span className="mt-1 block text-xs text-muted-foreground">
-                {task.model} · {task.duration} 秒 · {statusLabel(task.status)}
-              </span>
-            </button>
+    <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <main className="flex min-h-0 flex-col">
+        <Stage
+          ref={stageRef}
+          ratio={task ? stageRatio : ratioOf(pixels, 16 / 9)}
+          tone={contentUrl ? "filled" : task?.error || task?.status === "failed" || task?.status === "timeout" ? "error" : running ? "busy" : "idle"}
+          tag={
+            <span className="rounded-md bg-background/85 px-2 py-1 text-xs text-primary ring-1 ring-primary/40">
+              演示：不连接上游，不扣真实余额
+            </span>
+          }
+        >
+          {contentUrl ? (
+            <video className="absolute inset-0 size-full bg-black object-contain" controls src={contentUrl} />
+          ) : task && running ? (
+            <>
+              <StageSweep />
+              <StageCopy big={`${task.progress}%`}>
+                <p role="status" className="flex items-center justify-center gap-2 text-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  {statusLabel(task.status)}
+                </p>
+              </StageCopy>
+              <div className="absolute inset-x-0 bottom-0 h-1 bg-background/40">
+                <div className="h-full bg-primary transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${task.progress}%` }} />
+              </div>
+            </>
+          ) : task && (task.error || task.status === "failed" || task.status === "timeout") ? (
+            <StageCopy>
+              <p className="text-foreground">{task.error ?? `任务${statusLabel(task.status)}。`}</p>
+              {task.id && task.error ? (
+                <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => setPolling(true)}>
+                  继续查询
+                </Button>
+              ) : null}
+            </StageCopy>
           ) : (
-            <p className="rounded-xl border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">还没有模拟任务。</p>
+            <StageCopy big={formatPixels(pixels)}>
+              {spec?.resolution}，{duration} 秒。提交后，进度和演示样片会出现在这个框里。
+            </StageCopy>
+          )}
+        </Stage>
+
+        {contentUrl ? (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t bg-card/60 px-4 py-2.5 text-sm">
+            <span className="font-medium">{task?.model}</span>
+            <span className="text-muted-foreground">{task?.duration} 秒</span>
+            <span className="text-xs text-muted-foreground">这是本地生成的纯色样片，不是模型结果。</span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              nativeButton={false}
+              render={<a href={contentUrl} download="jaxapi-mock.mp4" />}
+            >
+              <Download />
+              下载样片
+            </Button>
+          </div>
+        ) : null}
+
+        <div className="flex items-center gap-3 border-t bg-background px-3 py-2.5 md:px-4">
+          {task ? (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm" title={task.prompt}>
+                {task.prompt}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {task.model}，{task.duration} 秒，{statusLabel(task.status)}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">演示任务只保存在这台浏览器和这次本地进程里。</p>
           )}
         </div>
-      </section>
-      <section className={pane(tab === "compose", true)}>
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 overflow-y-auto px-4 py-4 md:px-6">
-          <div className="rounded-xl border border-primary/40 bg-primary/10 p-3 text-sm leading-6">
-            本地模拟，协议未验证。不会向 jaxapi.top 或 SuperGPT 提交，也不会扣真实余额。个人折扣不会改变价表。
+
+        <div className="border-t bg-background px-3 pt-1 pb-3 md:px-4">
+          <div className="rounded-xl bg-card ring-1 ring-border focus-within:ring-ring">
+            <label htmlFor="video-prompt" className="sr-only">
+              描述要生成的视频
+            </label>
+            <textarea
+              id="video-prompt"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value.slice(0, 2000))}
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void submit();
+              }}
+              placeholder="描述要生成的视频，例如：傍晚的河面，一盏船灯慢慢靠近。"
+              className="block field-sizing-content max-h-[32vh] min-h-20 w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-base leading-7 outline-none placeholder:text-muted-foreground md:text-[15px]"
+            />
+            <div className="flex flex-wrap items-center gap-2 px-3 pb-2">
+              <span className="text-xs text-muted-foreground">
+                写 [[fail]] 或 [[stall]] 可演示失败和超时
+              </span>
+              <span className="text-xs text-muted-foreground tabular-nums">{prompt.length}/2000</span>
+              <span className="ml-auto text-sm tabular-nums">{formatUsd(estimate?.totalUsd)}</span>
+              <Button type="button" className="h-9 px-4" disabled={!canSubmit} onClick={() => void submit()}>
+                {running ? <Loader2 className="animate-spin" /> : null}
+                提交演示任务
+              </Button>
+            </div>
           </div>
-          <h2 className="font-[family-name:var(--font-display)] text-2xl">描述要生成的视频</h2>
-          <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value.slice(0, 2000))} className="min-h-32 text-base" />
-          <p className="text-xs text-muted-foreground">在提示词里写 [[fail]] 或 [[stall]] 可演示失败和超时。普通提示词约两秒后给出一段本地样片。</p>
-          <label className="space-y-2">
-            <span className="text-xs text-muted-foreground">视频模型（{VIDEO_MODELS.length} 个）</span>
-            <Select value={model} onValueChange={(value) => value && setModel(value as VideoModelId)}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {VIDEO_MODELS.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-          <div>
-            <p className="text-xs text-muted-foreground">时长</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {(spec?.durations ?? []).map((item) => (
-                <Button key={item} type="button" size="sm" variant={item === duration ? "default" : "outline"} onClick={() => setDuration(item)}>
-                  {item} 秒
-                </Button>
+        </div>
+      </main>
+
+      <aside className="space-y-6 border-t bg-card/40 px-4 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+        <SettingRow label={`模型（${VIDEO_MODELS.length} 个）`}>
+          <Select value={model} onValueChange={(value) => value && setModel(value as VideoModelId)}>
+            <SelectTrigger className="w-full" aria-label="视频模型">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODEL_GROUPS.map((group) => (
+                <SelectGroup key={group.label}>
+                  <SelectLabel>{group.label}</SelectLabel>
+                  {group.ids.map((id) => (
+                    <SelectItem key={id} value={id}>
+                      {videoSpec(id)?.label ?? id}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
-            </div>
+            </SelectContent>
+          </Select>
+        </SettingRow>
+
+        <SettingRow label="时长">
+          {spec && spec.durations.length > 1 ? (
+            <Segmented
+              label="时长"
+              value={duration}
+              onChange={setDuration}
+              options={spec.durations.map((item) => ({
+                value: item,
+                label: `${item} 秒`,
+                hint: `${spec.prices[item]?.toFixed(2) ?? "—"} USD`,
+              }))}
+            />
+          ) : (
+            <p className="text-sm">
+              {duration} 秒<span className="ml-2 text-xs text-muted-foreground">这个模型只有这一档</span>
+            </p>
+          )}
+        </SettingRow>
+
+        <SettingRow label="分辨率" note="由模型决定，不能单独修改。像素尺寸只用于显示，不会发送。">
+          <p className="text-sm tabular-nums">
+            {spec?.resolution}
+            <span className="ml-2 text-muted-foreground">{formatPixels(pixels)}</span>
+          </p>
+        </SettingRow>
+
+        {props.blockedReason ? (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm leading-6">{props.blockedReason}</p>
+        ) : null}
+
+        <div className="border-t pt-5">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-sm">本次预估</span>
+            <span className="text-xl font-medium tabular-nums">{formatUsd(estimate?.totalUsd)}</span>
           </div>
-          <p className="text-sm text-muted-foreground">分辨率档位 {spec?.resolution}，由模型决定，不能改成别的档。</p>
-          <div className="rounded-xl border bg-card/70 p-3 text-sm">
-            <div className="flex justify-between"><span>单次售价</span><span className="tabular-nums">{formatUsd(estimate?.totalUsd)}</span></div>
-            <div className="mt-1 flex justify-between font-medium"><span>本次预估</span><span className="tabular-nums">{formatUsd(estimate?.totalUsd)}</span></div>
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{estimate?.tierLabel}。这是成本×2 的绝对价，倍率固定为 1。</p>
-          </div>
-          {props.blockedReason ? <p className="text-sm text-destructive">{props.blockedReason}</p> : null}
-          <Button type="button" className="h-11" disabled={!props.enabled || !estimate || !prompt.trim() || Boolean(task && !isTerminal(task.status))} onClick={() => void submit()}>
-            {task && !isTerminal(task.status) ? <Loader2 className="animate-spin" /> : null}
-            提交模拟任务
-          </Button>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            {estimate?.tierLabel ? `${estimate.tierLabel}。` : null}价表上的绝对价，个人折扣不改变它。
+          </p>
         </div>
-      </section>
-      <section className={pane(tab === "result")}>
-        <div className="px-4 py-3">
-          <h2 className="text-sm font-medium">视频结果</h2>
-        </div>
-        <div className="space-y-3 overflow-y-auto px-4 pb-5">
-          <p className="text-xs leading-5 text-muted-foreground">{note}</p>
-          {!task ? <p className="text-sm text-muted-foreground">提交后，进度和样片会出现在这里。</p> : null}
-          {task && !isTerminal(task.status) ? (
-            <div className="rounded-xl border p-3">
-              <div className="flex items-center gap-2 text-sm"><Loader2 className="animate-spin" />{statusLabel(task.status)} · {task.progress}%</div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary" style={{ width: `${task.progress}%` }} /></div>
-            </div>
-          ) : null}
-          {task?.error ? <p className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm leading-6">{task.error}</p> : null}
-          {contentUrl ? (
-            <div className="space-y-2">
-              <video className="w-full rounded-xl bg-black" controls src={contentUrl} />
-              <a className="text-sm text-primary underline" href={contentUrl} download="jaxapi-mock.mp4">下载样片</a>
-              <p className="text-xs text-muted-foreground">样片是本地纯色短片，不是模型生成结果。</p>
-            </div>
-          ) : null}
-          {task ? (
-            <dl className="space-y-1 text-sm">
-              <div className="flex justify-between"><dt className="text-muted-foreground">模拟预扣</dt><dd className="tabular-nums">{formatUsd(task.priceUsd)}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted-foreground">模拟余额</dt><dd className="tabular-nums">{formatUsd(task.mockBalance)}</dd></div>
-              <div className="flex justify-between"><dt className="text-muted-foreground">账户余额</dt><dd className="tabular-nums">{formatUsd(props.accountBalance)}</dd></div>
-            </dl>
-          ) : null}
-          {task?.id && task.error ? (
-            <Button type="button" variant="outline" onClick={() => setPolling(true)}>继续查询</Button>
-          ) : null}
-        </div>
-      </section>
+
+        {task ? (
+          <dl className="space-y-1.5 border-t pt-5 text-sm">
+            <Line label="演示预扣" value={formatUsd(task.priceUsd)} />
+            <Line label="演示账本余额" value={formatUsd(task.mockBalance)} />
+            <Line label="真实账户余额" value={formatUsd(props.accountBalance)} />
+          </dl>
+        ) : null}
+        <p className="text-xs leading-5 text-muted-foreground">{note}</p>
+      </aside>
     </div>
+  );
+}
+
+function Line({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="tabular-nums">{value}</dd>
     </div>
   );
 }
@@ -302,11 +411,11 @@ async function readTask(id: string, userId: string): Promise<MockResponse> {
 }
 
 function failureText(code?: string): string {
-  if (code === "wrong_group") return "当前密钥不在媒体台分组，模拟任务没有建立。";
-  if (code === "insufficient") return "模拟账本余额不够支付这一档，没有建立任务。";
+  if (code === "wrong_group") return "当前密钥不在媒体台分组，演示任务没有建立。";
+  if (code === "insufficient") return "演示账本余额不够支付这一档，没有建立任务。";
   if (code === "unknown_price") return "这个模型或时长不在 17 个视频档位里。";
-  if (code === "forbidden") return "不能查看不属于当前用户的模拟任务。";
-  return "模拟任务没有建立。";
+  if (code === "forbidden") return "不能查看不属于当前用户的演示任务。";
+  return "演示任务没有建立。";
 }
 
 function isTerminal(status: string): boolean {
@@ -321,10 +430,6 @@ function statusLabel(status: string): string {
   if (status === "timeout") return "超时";
   if (status === "submitting") return "提交中";
   return status;
-}
-
-function pane(visible: boolean, middle = false): string {
-  return `flex min-h-0 flex-col ${middle ? "" : "lg:border-r"} ${visible ? "" : "hidden"} lg:flex`;
 }
 
 function appPath(path: string): string {

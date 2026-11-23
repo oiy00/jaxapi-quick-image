@@ -39,6 +39,7 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-stage: var(--stage);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -73,6 +74,7 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
+  --stage: oklch(0.94 0 0);
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -83,38 +85,46 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
+/*
+ * Media desk palette. The chrome is neutral graphite (zero chroma) so generated
+ * images are judged against grey, not a tinted backdrop. Amber is kept from the
+ * JaxApi brand and reserved for the primary action and selected states.
+ *   graphite #1f2124  panel #272a2e  stage #34373b  line rgb(255 255 255 / 8%)
+ *   text #ededeb  muted #9ea2a7  amber #e5b04a
+ */
 .dark {
-  --background: oklch(0.16 0.012 70);
-  --foreground: oklch(0.96 0.01 85);
-  --card: oklch(0.205 0.014 65);
-  --card-foreground: oklch(0.96 0.01 85);
-  --popover: oklch(0.22 0.014 65);
-  --popover-foreground: oklch(0.96 0.01 85);
-  --primary: oklch(0.8 0.12 78);
-  --primary-foreground: oklch(0.2 0.03 60);
-  --secondary: oklch(0.27 0.014 60);
-  --secondary-foreground: oklch(0.96 0.01 85);
-  --muted: oklch(0.26 0.012 60);
-  --muted-foreground: oklch(0.74 0.02 80);
-  --accent: oklch(0.3 0.03 70);
-  --accent-foreground: oklch(0.96 0.01 85);
+  --background: #1f2124;
+  --foreground: #ededeb;
+  --card: #272a2e;
+  --card-foreground: #ededeb;
+  --popover: #2b2e32;
+  --popover-foreground: #ededeb;
+  --primary: #e5b04a;
+  --primary-foreground: #1f1a10;
+  --secondary: #2f3236;
+  --secondary-foreground: #ededeb;
+  --muted: #2f3236;
+  --muted-foreground: #9ea2a7;
+  --accent: #34373b;
+  --accent-foreground: #ededeb;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.8 0.12 78);
+  --border: rgb(255 255 255 / 8%);
+  --input: rgb(255 255 255 / 12%);
+  --ring: #e5b04a;
+  --stage: #34373b;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: #272a2e;
+  --sidebar-foreground: #ededeb;
+  --sidebar-primary: #e5b04a;
+  --sidebar-primary-foreground: #1f1a10;
+  --sidebar-accent: #34373b;
+  --sidebar-accent-foreground: #ededeb;
+  --sidebar-border: rgb(255 255 255 / 8%);
+  --sidebar-ring: #e5b04a;
 }
 
 @layer base {
@@ -128,9 +138,27 @@
     @apply font-sans;
   }
   body {
-    background-image:
-      radial-gradient(1200px 500px at 10% -10%, oklch(0.8 0.12 78 / 0.12), transparent 55%),
-      radial-gradient(900px 400px at 100% 0%, oklch(0.55 0.05 50 / 0.18), transparent 50%);
     min-height: 100%;
   }
+}
+
+/* The stage frame. Its width is the largest box of the chosen ratio that fits the stage. */
+.stage-fit {
+  container-type: size;
+}
+.stage-frame {
+  width: min(100cqw, 100cqh * var(--ratio, 1));
+  aspect-ratio: var(--ratio, 1);
+  transition: width 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.stage-sweep {
+  animation: stage-sweep 2.4s ease-in-out infinite;
+}
+@keyframes stage-sweep {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-frame { transition: none; }
+  .stage-sweep { animation: none; opacity: 0.4; }
 }

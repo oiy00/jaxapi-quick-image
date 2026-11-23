@@ -70,10 +70,13 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
 
 export const DEFAULT_VIDEO_MODEL: VideoModelId = "video-ray";
 
-/** Guessed pixels. Not a SuperGPT field and not sent by this app. */
+/**
+ * Display-only pixel sizes. Not a SuperGPT field and not sent by this app.
+ * 768p follows the official MiniMax H3 16:9 size (1344x768); 1366x768 is rejected upstream.
+ */
 export const VIDEO_PIXEL_SIZE: Record<VideoResolution, string> = {
   "720p": "1280x720",
-  "768p": "1366x768",
+  "768p": "1344x768",
   "2k": "2560x1440",
 };
 

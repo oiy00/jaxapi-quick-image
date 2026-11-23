@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh-CN" className={`dark ${sans.variable} ${display.variable}`}>
+    <html lang="zh-CN" suppressHydrationWarning className={`dark ${sans.variable} ${display.variable}`}>
       <body className="antialiased">
         <Providers>{children}</Providers>
       </body>
