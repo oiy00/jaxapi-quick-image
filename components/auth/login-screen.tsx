@@ -60,12 +60,14 @@ export function LoginScreen({ settings, settingsError, onLoggedIn }: LoginScreen
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-5 py-12">
-      <p className="text-xs tracking-[0.22em] text-primary uppercase">JaxApi</p>
-      <h1 className="mt-3 font-[family-name:var(--font-display)] text-4xl font-medium tracking-tight">媒体台</h1>
+      <h1 className="flex items-baseline gap-2.5">
+        <span className="font-[family-name:var(--font-display)] text-4xl font-medium tracking-tight">JaxApi</span>
+        <span className="text-xl text-muted-foreground">媒体台</span>
+      </h1>
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
-        使用已有的 jaxapi.top 账户登录。余额、密钥和分组都沿用中转站，这里只负责出图。
+        用 jaxapi.top 的账户登录。余额、密钥和分组都沿用中转站。
       </p>
-      <form onSubmit={onSubmit} className="mt-8 space-y-4 rounded-2xl border bg-card/80 p-5 shadow-2xl shadow-black/20">
+      <form onSubmit={onSubmit} className="mt-8 space-y-4 rounded-xl bg-card p-5 ring-1 ring-border">
         {settingsError ? (
           <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{settingsError}</p>
         ) : null}

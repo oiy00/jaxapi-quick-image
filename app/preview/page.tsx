@@ -10,7 +10,7 @@ import { estimateImageCost } from "@/lib/pricing";
 const sample =
   "data:image/svg+xml," +
   encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800"><rect width="100%" height="100%" fill="#1a1612"/><circle cx="400" cy="340" r="140" fill="#e0b15a"/><rect x="160" y="520" width="480" height="16" rx="8" fill="#8a7350"/></svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800"><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b9c8e6"/><stop offset="1" stop-color="#e8edf6"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#s)"/><circle cx="560" cy="250" r="70" fill="#f7f9fc"/><path d="M0 560 L220 380 L380 500 L520 400 L800 600 L800 800 L0 800 Z" fill="#5d73a3"/><path d="M0 640 L260 520 L500 620 L800 540 L800 800 L0 800 Z" fill="#33456e"/></svg>`,
   );
 
 export default function PreviewPage() {
