@@ -58,7 +58,7 @@ export function Studio(props: StudioProps) {
 
   return (
     <div className="flex min-h-dvh flex-col lg:h-dvh lg:min-h-0">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background px-3 md:gap-5 md:px-5">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card px-3 md:gap-5 md:px-5">
         {props.embedded ? null : (
           <span className="font-[family-name:var(--font-display)] text-lg font-medium tracking-tight">JaxApi</span>
         )}
@@ -167,7 +167,7 @@ function ImageDesk(props: StudioProps) {
         />
       </main>
 
-      <aside className="space-y-6 border-t bg-card/40 px-4 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+      <aside className="space-y-6 border-t bg-card px-4 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
         <SettingRow label="模型">
           <Select value={props.draft.model} onValueChange={(value) => value && props.onDraft({ model: value as Draft["model"] })}>
             <SelectTrigger className="w-full" aria-label="模型">
@@ -266,12 +266,12 @@ function AspectTile({ aspect, active, onClick }: { aspect: string; active: boole
       aria-pressed={active}
       onClick={onClick}
       className={`flex h-14 flex-col items-center justify-center gap-1 rounded-md text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
-        active ? "bg-primary/15 text-foreground ring-1 ring-primary" : "text-muted-foreground ring-1 ring-border hover:bg-accent hover:text-foreground"
+        active ? "bg-primary/8 text-primary ring-1 ring-primary" : "text-muted-foreground ring-1 ring-border hover:bg-accent hover:text-foreground"
       }`}
     >
       <span aria-hidden className="grid size-6 place-items-center">
         <span
-          className={`block rounded-[2px] border ${active ? "border-primary bg-primary/30" : "border-current"}`}
+          className={`block rounded-[2px] border ${active ? "border-primary bg-primary/20" : "border-current"}`}
           style={{ width: w, height: h }}
         />
       </span>
@@ -350,7 +350,7 @@ function PendingCopy({ startedAt, editing }: { startedAt: number; editing: boole
 function ResultBar({ run }: { run: Extract<RunView, { status: "success" }> }) {
   const image = run.images[0];
   return (
-    <div className="border-t bg-card/60 px-4 py-2.5 text-sm">
+    <div className="border-t bg-card px-4 py-2.5 text-sm">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
         <span className="font-medium">{run.model}</span>
         <span className="text-muted-foreground tabular-nums">{formatPixels(run.size)}</span>
@@ -448,7 +448,7 @@ function Filmstrip({
               >
                 {item.thumbUrl ? <img src={item.thumbUrl} alt="" className="size-full object-cover" /> : null}
                 {item.status === "succeeded" ? null : (
-                  <span className={`absolute inset-x-0 bottom-0 py-px text-center text-[10px] ${item.status === "pending" ? "bg-background/80" : "bg-destructive/80 text-white"}`}>
+                  <span className={`absolute inset-x-0 bottom-0 py-px text-center text-[10px] ${item.status === "pending" ? "bg-card/90" : "bg-destructive/85 text-white"}`}>
                     {STATUS_LABEL[item.status]}
                   </span>
                 )}

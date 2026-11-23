@@ -6,7 +6,7 @@ import { Toaster } from "@/components/ui/sonner";
 
 export function Providers({ children }: { children: ReactNode }) {
   return (
-    <ThemeProvider attribute="class" forcedTheme="dark" enableSystem={false}>
+    <ThemeProvider attribute="class" forcedTheme="light" enableSystem={false}>
       {children}
       <Toaster />
     </ThemeProvider>

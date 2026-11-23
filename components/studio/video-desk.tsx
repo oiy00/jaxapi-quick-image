@@ -207,7 +207,7 @@ export function VideoDesk(props: VideoDeskProps) {
           ratio={task ? stageRatio : ratioOf(pixels, 16 / 9)}
           tone={contentUrl ? "filled" : task?.error || task?.status === "failed" || task?.status === "timeout" ? "error" : running ? "busy" : "idle"}
           tag={
-            <span className="rounded-md bg-background/85 px-2 py-1 text-xs text-primary ring-1 ring-primary/40">
+            <span className="rounded-md bg-card px-2 py-1 text-xs text-primary ring-1 ring-primary/30">
               演示：不连接上游，不扣真实余额
             </span>
           }
@@ -223,7 +223,7 @@ export function VideoDesk(props: VideoDeskProps) {
                   {statusLabel(task.status)}
                 </p>
               </StageCopy>
-              <div className="absolute inset-x-0 bottom-0 h-1 bg-background/40">
+              <div className="absolute inset-x-0 bottom-0 h-1 bg-muted">
                 <div className="h-full bg-primary transition-[width] duration-500 motion-reduce:transition-none" style={{ width: `${task.progress}%` }} />
               </div>
             </>
@@ -244,7 +244,7 @@ export function VideoDesk(props: VideoDeskProps) {
         </Stage>
 
         {contentUrl ? (
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t bg-card/60 px-4 py-2.5 text-sm">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t bg-card px-4 py-2.5 text-sm">
             <span className="font-medium">{task?.model}</span>
             <span className="text-muted-foreground">{task?.duration} 秒</span>
             <span className="text-xs text-muted-foreground">这是本地生成的纯色样片，不是模型结果。</span>
@@ -306,7 +306,7 @@ export function VideoDesk(props: VideoDeskProps) {
         </div>
       </main>
 
-      <aside className="space-y-6 border-t bg-card/40 px-4 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+      <aside className="space-y-6 border-t bg-card px-4 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
         <SettingRow label={`模型（${VIDEO_MODELS.length} 个）`}>
           <Select value={model} onValueChange={(value) => value && setModel(value as VideoModelId)}>
             <SelectTrigger className="w-full" aria-label="视频模型">

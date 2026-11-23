@@ -29,12 +29,12 @@ type StageProps = {
 export const Stage = forwardRef<HTMLDivElement, StageProps>(function Stage({ ratio, tone = "idle", tag, children }, ref) {
   const frameTone =
     tone === "error"
-      ? "border border-destructive/50 bg-destructive/10"
+      ? "border border-destructive/40 bg-card"
       : tone === "filled"
-        ? "bg-black/20"
+        ? "bg-card shadow-[0_1px_2px_rgb(22_24_29/8%),0_8px_24px_-12px_rgb(22_24_29/18%)]"
         : tone === "busy"
-          ? "bg-background/30"
-          : "bg-background/15";
+          ? "bg-card/90"
+          : "bg-card/70";
   return (
     <div ref={ref} className="relative flex h-[58vh] min-h-72 flex-col bg-stage lg:h-auto lg:min-h-0 lg:flex-1">
       {tag ? <div className="px-4 pt-3">{tag}</div> : null}
@@ -54,7 +54,7 @@ export const Stage = forwardRef<HTMLDivElement, StageProps>(function Stage({ rat
 });
 
 function CropMarks() {
-  const mark = "pointer-events-none absolute size-4 border-foreground/45";
+  const mark = "pointer-events-none absolute size-4 border-foreground/35";
   return (
     <>
       <span aria-hidden className={`${mark} top-0 left-0 border-t border-l`} />
@@ -71,7 +71,7 @@ export function StageCopy({ big, children }: { big?: ReactNode; children?: React
     <div className="absolute inset-0 grid place-items-center p-4 text-center">
       <div className="max-w-sm">
         {big ? (
-          <p className="font-[family-name:var(--font-display)] text-3xl font-light tracking-tight text-foreground/85 tabular-nums md:text-5xl">
+          <p className="font-[family-name:var(--font-display)] text-3xl font-light tracking-tight text-foreground/80 tabular-nums md:text-5xl">
             {big}
           </p>
         ) : null}
@@ -85,7 +85,7 @@ export function StageSweep() {
   return (
     <span
       aria-hidden
-      className="stage-sweep pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-primary/10 to-transparent"
+      className="stage-sweep pointer-events-none absolute inset-0 bg-gradient-to-b from-transparent via-primary/8 to-transparent"
     />
   );
 }
@@ -105,7 +105,7 @@ export function Segmented<T extends string | number>({
   size?: "sm" | "md";
 }) {
   return (
-    <div role="group" aria-label={label} className="flex gap-0.5 rounded-lg bg-background/60 p-0.5 ring-1 ring-border">
+    <div role="group" aria-label={label} className="flex gap-0.5 rounded-lg bg-muted p-0.5">
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -116,7 +116,7 @@ export function Segmented<T extends string | number>({
             onClick={() => onChange(option.value)}
             className={`flex flex-1 flex-col items-center justify-center rounded-md px-3 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
               size === "sm" ? "h-7 text-[0.8rem]" : option.hint ? "h-12" : "h-9 text-sm"
-            } ${active ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-accent hover:text-foreground"}`}
+            } ${active ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground/70 hover:bg-card hover:text-foreground"}`}
           >
             <span className="font-medium">{option.label}</span>
             {option.hint ? (

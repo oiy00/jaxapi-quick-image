@@ -50,81 +50,83 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --background: #f6f7f9;
+  --foreground: #16181d;
+  --card: #ffffff;
+  --card-foreground: #16181d;
+  --popover: #ffffff;
+  --popover-foreground: #16181d;
+  --primary: #2f5bea;
+  --primary-foreground: #ffffff;
+  --secondary: #eef0f3;
+  --secondary-foreground: #16181d;
+  --muted: #eef0f3;
+  --muted-foreground: #5f6672;
+  --accent: #eceef2;
+  --accent-foreground: #16181d;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: #e3e6eb;
+  --input: #d9dde3;
+  --ring: #2f5bea;
+  --stage: #e9ebef;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --stage: oklch(0.94 0 0);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #ffffff;
+  --sidebar-foreground: #16181d;
+  --sidebar-primary: #2f5bea;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eceef2;
+  --sidebar-accent-foreground: #16181d;
+  --sidebar-border: #e3e6eb;
+  --sidebar-ring: #2f5bea;
 }
 
 /*
- * Media desk palette. The chrome is neutral graphite (zero chroma) so generated
- * images are judged against grey, not a tinted backdrop. Amber is kept from the
- * JaxApi brand and reserved for the primary action and selected states.
- *   graphite #1f2124  panel #272a2e  stage #34373b  line rgb(255 255 255 / 8%)
- *   text #ededeb  muted #9ea2a7  amber #e5b04a
+ * Media desk palette (light, the default). Chrome is near-neutral cool grey so
+ * generated images are judged against grey, not a tinted backdrop. Cobalt is the
+ * only accent, reserved for the primary action and selected states.
+ *   background #f6f7f9  panel #ffffff  stage #e9ebef  line #e3e6eb
+ *   text #16181d  muted #5f6672  cobalt #2f5bea
+ * The .dark set below is the same scheme on a cool blue-grey base; the app
+ * currently forces light.
  */
 .dark {
-  --background: #1f2124;
-  --foreground: #ededeb;
-  --card: #272a2e;
-  --card-foreground: #ededeb;
-  --popover: #2b2e32;
-  --popover-foreground: #ededeb;
-  --primary: #e5b04a;
-  --primary-foreground: #1f1a10;
-  --secondary: #2f3236;
-  --secondary-foreground: #ededeb;
-  --muted: #2f3236;
-  --muted-foreground: #9ea2a7;
-  --accent: #34373b;
-  --accent-foreground: #ededeb;
+  --background: #15181e;
+  --foreground: #e8eaee;
+  --card: #1c2028;
+  --card-foreground: #e8eaee;
+  --popover: #1f242c;
+  --popover-foreground: #e8eaee;
+  --primary: #5b8cff;
+  --primary-foreground: #0d1220;
+  --secondary: #252a33;
+  --secondary-foreground: #e8eaee;
+  --muted: #252a33;
+  --muted-foreground: #949bab;
+  --accent: #2a2f38;
+  --accent-foreground: #e8eaee;
   --destructive: oklch(0.704 0.191 22.216);
   --border: rgb(255 255 255 / 8%);
   --input: rgb(255 255 255 / 12%);
-  --ring: #e5b04a;
-  --stage: #34373b;
+  --ring: #5b8cff;
+  --stage: #2a2f38;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: #272a2e;
-  --sidebar-foreground: #ededeb;
-  --sidebar-primary: #e5b04a;
-  --sidebar-primary-foreground: #1f1a10;
-  --sidebar-accent: #34373b;
-  --sidebar-accent-foreground: #ededeb;
+  --sidebar: #1c2028;
+  --sidebar-foreground: #e8eaee;
+  --sidebar-primary: #5b8cff;
+  --sidebar-primary-foreground: #0d1220;
+  --sidebar-accent: #2a2f38;
+  --sidebar-accent-foreground: #e8eaee;
   --sidebar-border: rgb(255 255 255 / 8%);
-  --sidebar-ring: #e5b04a;
+  --sidebar-ring: #5b8cff;
 }
 
 @layer base {
