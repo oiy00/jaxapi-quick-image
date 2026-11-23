@@ -83,7 +83,7 @@ export function VideoDesk(props: VideoDeskProps) {
   const [duration, setDuration] = useState(defaultDuration(DEFAULT_VIDEO_MODEL));
   const [prompt, setPrompt] = useState("傍晚的河面，一盏船灯慢慢靠近。");
   const [task, setTask] = useState<SavedTask | null>(null);
-  const [note, setNote] = useState("售价来自价表。提交先冻结可用余额，完成后再从余额扣除。");
+  const [note, setNote] = useState("售价来自价表。提交时从余额扣入视频账本，完成不再扣第二次。");
   const [polling, setPolling] = useState(false);
   const spec = videoSpec(model);
   const estimate = useMemo(() => estimateVideoCost({ model, duration }), [duration, model]);
@@ -244,7 +244,7 @@ export function VideoDesk(props: VideoDeskProps) {
           tone={contentUrl ? "filled" : task?.error || task?.status === "failed" ? "error" : running ? "busy" : "idle"}
           tag={
             <span className="rounded-md bg-card px-2 py-1 text-xs text-primary ring-1 ring-primary/30">
-              {verified ? "先冻结，完成后再扣余额" : "这一档暂不提交"}
+              {verified ? "按价表先扣余额" : "这一档暂不提交"}
             </span>
           }
         >
@@ -397,7 +397,7 @@ export function VideoDesk(props: VideoDeskProps) {
           </div>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
             {estimate?.tierLabel ? `${estimate.tierLabel}。` : null}
-            {verified ? "价表上的绝对售价。失败只解除冻结，不会把余额加回去。" : "价表里有这一档，但没有已完成的上游记录，按钮保持关闭。"}
+            {verified ? "价表上的绝对售价。明确失败退回这一笔；超时不退、也不重试。" : "价表里有这一档，但没有已完成的上游记录，按钮保持关闭。"}
           </p>
         </div>
 

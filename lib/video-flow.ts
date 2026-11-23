@@ -191,7 +191,9 @@ export class VideoFlow {
       current.updatedAt = this.now();
       if (!result.ok) {
         current.status = "failed";
-        current.error = "可用余额不足（余额减去冻结）。没有冻结，也没有向视频上游提交。";
+        current.error = result.code === "revoked"
+          ? "媒体台密钥已停用、过期或超出额度。没有扣余额，也没有提交。"
+          : "可用余额不足（余额减去其他产品已冻结的部分）。没有扣余额，也没有提交。";
       } else {
         current.debitState = "held";
         current.status = "held";
@@ -262,10 +264,10 @@ export class VideoFlow {
       if (result.ok) {
         current.debitState = "released";
         current.reversalUnknown = false;
-        current.error = current.error || "上游已明确失败。冻结已解除，余额没有增加。";
+        current.error = current.error || "上游已明确失败。这一笔已按原金额退回余额，只退一次。";
       } else {
         current.reversalUnknown = true;
-        current.error = current.error || "没有找到可解除的冻结。余额没有增加。";
+        current.error = current.error || "没有找到可退的视频账本。没有再次退回。";
       }
       book.save(current);
     });
@@ -298,7 +300,7 @@ export class VideoFlow {
         current.debitState = "settled";
         current.error = null;
       } else if (result.code === "settle_blocked") {
-        current.error = "视频已完成，但冻结没能转成扣费。余额没有增加，冻结仍留在账上。";
+        current.error = "视频已完成。余额在提交时已经扣过，没有第二次扣款。";
       } else {
         current.reversalUnknown = true;
         current.error = current.error || "没有找到可结算的冻结。余额没有增加。";
@@ -363,7 +365,7 @@ function publish(job: VideoJob): PublicVideoJob {
     size: job.size,
     priceUsd: job.priceUsd,
     debitState: job.debitState,
-    balanceCharged: job.debitState === "settled",
+    balanceCharged: job.debitState === "held" || job.debitState === "settled",
     error: job.error,
     upstreamKnown: Boolean(job.upstreamId),
   };

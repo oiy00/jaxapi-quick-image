@@ -9,7 +9,7 @@ import { fetchRelayMediaGrant } from "../lib/relay-account.ts";
 import { createSuperGptVideo, pollSuperGptVideo, readSuperGptContent, videoContentUrl } from "../lib/supergpt-video.ts";
 import { supergptVideoCreateBody } from "../lib/videos.ts";
 import { MemoryBilling } from "../lib/video-billing-port.ts";
-import { HOLD_FREEZE_SQL, RELEASE_SQL, SETTLE_SQL } from "../lib/postgres-billing.ts";
+import { ESCROW_CREDIT_SQL, ESCROW_DEBIT_SQL } from "../lib/postgres-billing.ts";
 import { readVideoConfig } from "../lib/video-config.ts";
 import { VideoFlow, type VideoUpstream } from "../lib/video-flow.ts";
 import { videoPost } from "../lib/video-route.ts";
@@ -18,12 +18,12 @@ import type { ApiGroup, ApiKeyRecord } from "../lib/types.ts";
 
 const caller = { userId: 4, groupId: MEDIA_GROUP_ID, groupName: "媒体台" };
 
-test("hold SQL freezes available funds and release does not credit balance", () => {
-  assert.match(HOLD_FREEZE_SQL, /balance - frozen_balance >=/);
-  assert.match(SETTLE_SQL, /balance = balance - \$2::numeric/);
-  assert.match(SETTLE_SQL, /frozen_balance = frozen_balance - \$2::numeric/);
-  assert.doesNotMatch(RELEASE_SQL, /(^|[^_])balance =/);
-  assert.match(RELEASE_SQL, /frozen_balance = frozen_balance - \$2::numeric/);
+test("escrow debits balance without writing frozen_balance, and credits that amount back", () => {
+  assert.match(ESCROW_DEBIT_SQL, /balance - frozen_balance >=/);
+  assert.match(ESCROW_DEBIT_SQL, /SET balance = balance - \$2::numeric/);
+  assert.doesNotMatch(ESCROW_DEBIT_SQL, /frozen_balance =/);
+  assert.match(ESCROW_CREDIT_SQL, /SET balance = balance \+ \$2::numeric/);
+  assert.doesNotMatch(ESCROW_CREDIT_SQL, /frozen_balance =/);
 });
 
 test("sell prices stay on the configured table and verified bodies keep 1344x768", () => {
@@ -221,8 +221,8 @@ test("real flow charges the sell table once and refuses unproven, poor, and fore
       assert.equal(first.job.size, "1280x720");
       assert.equal(first.job.status, "queued");
     }
-    assert.equal(billing.balanceOf(4), 10);
-    assert.equal(billing.frozenOf(4), 1.2);
+    assert.equal(billing.balanceOf(4), 8.8);
+    assert.equal(billing.frozenOf(4), 0);
     assert.equal(upstream.creates, 1);
     assert.equal(upstream.bodies[0]?.seconds, 10);
     assert.equal(upstream.bodies[0]?.size, "1280x720");
@@ -231,8 +231,8 @@ test("real flow charges the sell table once and refuses unproven, poor, and fore
     const again = await flow.submit({ caller, idempotencyKey: "idem-muse01", model: "muse-video", duration: 10, prompt: "河面" });
     assert.equal(again.ok, true);
     if (first.ok && again.ok) assert.equal(again.job.id, first.job.id);
-    assert.equal(billing.balanceOf(4), 10);
-    assert.equal(billing.frozenOf(4), 1.2);
+    assert.equal(billing.balanceOf(4), 8.8);
+    assert.equal(billing.frozenOf(4), 0);
     assert.equal(upstream.creates, 1);
 
     const other = await flow.status(first.ok ? first.job.id : "", 5);
@@ -246,16 +246,16 @@ test("real flow charges the sell table once and refuses unproven, poor, and fore
     const running = await flow.status(first.ok ? first.job.id : "", 4);
     assert.equal(running.ok, true);
     if (running.ok) assert.equal(running.job.status, "in_progress");
-    assert.equal(billing.balanceOf(4), 10);
-    assert.equal(billing.frozenOf(4), 1.2);
+    assert.equal(billing.balanceOf(4), 8.8);
+    assert.equal(billing.frozenOf(4), 0);
     assert.equal(upstream.creates, 1);
 
     upstream.mode = "timeout";
     const slow = await flow.status(first.ok ? first.job.id : "", 4);
     assert.equal(slow.ok, true);
     if (slow.ok) assert.equal(slow.job.status, "in_progress");
-    assert.equal(billing.balanceOf(4), 10);
-    assert.equal(billing.frozenOf(4), 1.2);
+    assert.equal(billing.balanceOf(4), 8.8);
+    assert.equal(billing.frozenOf(4), 0);
 
     upstream.mode = "done";
     const resumed = new VideoFlow(new FileJobStore(storePath), billing, upstream, () => "2026-11-23T00:10:00.000Z");
@@ -305,14 +305,14 @@ test("confirmed failure reverses once; ambiguous post does not retry or refund",
     const unknown = await pending.submit({ caller, idempotencyKey: "idem-unknown", model: "muse-video", duration: 10, prompt: "河" });
     assert.equal(unknown.ok, true);
     if (unknown.ok) assert.equal(unknown.job.status, "upstream_unknown");
-    assert.equal(held.balanceOf(4), 10);
-    assert.equal(held.frozenOf(4), 1.2);
+    assert.equal(held.balanceOf(4), 8.8);
+    assert.equal(held.frozenOf(4), 0);
     const retry = await pending.submit({ caller, idempotencyKey: "idem-unknown", model: "muse-video", duration: 10, prompt: "河" });
     assert.equal(retry.ok, true);
     if (retry.ok) assert.equal(retry.job.status, "upstream_unknown");
     assert.equal(ambiguousUpstream.creates, 1);
-    assert.equal(held.balanceOf(4), 10);
-    assert.equal(held.frozenOf(4), 1.2);
+    assert.equal(held.balanceOf(4), 8.8);
+    assert.equal(held.frozenOf(4), 0);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

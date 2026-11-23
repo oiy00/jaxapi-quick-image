@@ -2,7 +2,7 @@ import { addMoney, compareMoney, moneyEquals, moneyFromNumber, moneyToNumber, su
 
 export type HoldResult =
   | { ok: true; balance: number; frozen: number; alreadyApplied: boolean }
-  | { ok: false; code: "insufficient"; balance: number; frozen: number };
+  | { ok: false; code: "insufficient" | "revoked"; balance: number; frozen: number };
 
 export type SettleResult =
   | { ok: true; balance: number; frozen: number; alreadyApplied: boolean }
@@ -27,11 +27,11 @@ export class ReleaseAmbiguous extends Error {
 }
 
 export type BillingPort = {
-  /** Freeze available funds. Does not decrease users.balance. */
+  /** Debit users.balance once into escrow. Does not write frozen_balance. */
   hold(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<HoldResult>;
-  /** Convert a hold into a balance charge. Does not increase balance. */
+  /** Mark the escrow final. Does not debit again. */
   settle(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<SettleResult>;
-  /** Drop a hold that was never settled. Does not increase balance. */
+  /** Credit the escrowed amount back once after a confirmed failure. */
   release(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<ReleaseResult>;
 };
 
@@ -80,7 +80,7 @@ export class MemoryBilling implements BillingPort {
       this.charges.set(input.idempotencyKey, { userId: input.userId, amount, state: "rejected" });
       return { ok: false, code: "insufficient", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    wallet.frozen = addMoney(wallet.frozen, amount);
+    wallet.balance = subMoney(wallet.balance, amount);
     this.charges.set(input.idempotencyKey, { userId: input.userId, amount, state: "held" });
     return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: false };
   }
@@ -95,11 +95,9 @@ export class MemoryBilling implements BillingPort {
     if (existing.state === "settled") {
       return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: true };
     }
-    if (compareMoney(wallet.frozen, amount) < 0 || compareMoney(wallet.balance, amount) < 0) {
-      return { ok: false, code: "settle_blocked", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
+    if (!moneyEquals(existing.amount, amount)) {
+      return { ok: false, code: "not_held", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    wallet.balance = subMoney(wallet.balance, amount);
-    wallet.frozen = subMoney(wallet.frozen, amount);
     existing.state = "settled";
     return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: false };
   }
@@ -108,18 +106,16 @@ export class MemoryBilling implements BillingPort {
     const amount = moneyFromNumber(input.amountUsd);
     const existing = this.charges.get(input.idempotencyKey);
     const wallet = this.wallet(input.userId);
-    const balanceBefore = wallet.balance;
     if (!existing || existing.state === "rejected" || existing.state === "settled" || existing.userId !== input.userId) {
       return { ok: false, code: "not_held", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
     if (existing.state === "released") {
       return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyReleased: true };
     }
-    if (!moneyEquals(existing.amount, amount) || compareMoney(wallet.frozen, amount) < 0) {
-      throw new ReleaseAmbiguous("冻结金额对不上，没有改余额。");
+    if (!moneyEquals(existing.amount, amount)) {
+      throw new ReleaseAmbiguous("退回金额和账本不一致，没有退回。");
     }
-    wallet.frozen = subMoney(wallet.frozen, amount);
-    if (!moneyEquals(wallet.balance, balanceBefore)) throw new Error("release must not change balance");
+    wallet.balance = addMoney(wallet.balance, existing.amount);
     existing.state = "released";
     return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyReleased: false };
   }

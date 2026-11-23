@@ -27,7 +27,7 @@ npm run build
 
 可以提交的只有已完成过的两档：`muse-video` 10 秒，`minimax-h3-base-fast` 10 秒（尺寸 `1344x768`）。其余档位显示售价，但按钮关闭。`/api/jax` 不转发视频路径。浏览器里的 `requestVideo()` 会拒绝。
 
-真实提交使用 Postgres 里的冻结账本：先增加 `frozen_balance`，完成后再同时减少余额和冻结，明确失败只解除冻结，不会把余额加回去。适配器默认 `off`。审查并配置 `media_video_billing` 之后才改成 `postgres`。`/api/mock/videos` 返回 410。
+真实提交把售价从 `users.balance` 扣进独立的视频账本，不写 `frozen_balance`。完成不再扣第二次。上游明确失败时，按账本金额退回一次。超时不退、也不重试。适配器默认 `off`。审查并配置 `media_video_billing` 之后才改成 `postgres`。`/api/mock/videos` 返回 410。
 
 限制和扣费缺口见 [docs/VIDEO_STATUS.md](docs/VIDEO_STATUS.md) 与 [docs/VIDEO_BILLING.md](docs/VIDEO_BILLING.md)。
 

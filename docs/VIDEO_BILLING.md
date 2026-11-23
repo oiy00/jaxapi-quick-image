@@ -1,6 +1,6 @@
-# 视频账本：冻结、结算、解除冻结
+# 视频账本：先扣余额，成功结清，明确失败退回一次
 
-这篇给运维审查。云端不会执行生产 SQL，也不会用管理员账号连接数据库。
+这篇给运维审查。云端不会执行生产 SQL，也不会用管理员账号连接数据库。默认 `VIDEO_BILLING_ADAPTER=off`，所以这段代码还不会连生产库。
 
 ## 为什么不用现成的扣费入口
 
@@ -8,13 +8,13 @@
 
 ## 本应用的三步
 
-可用金额是 `balance - frozen_balance`。同一事务里 `SELECT ... FOR UPDATE` 锁住用户行，再按条件更新，避免和 Sub2API 的余额更新互相覆盖。只改 `balance`、`frozen_balance`、`updated_at`。0.2.24 的 `enqueue_user_auth_cache_invalidation()` 会在每次用户更新时执行，但 status、role、deleted_at 都没变时直接返回，不会写 outbox。
+可用金额仍是 `balance - frozen_balance`，这样其他产品已经冻住的钱不会被视频再花掉。视频自己不增加 `frozen_balance`。0.2.24 的 `DeductBalance` 不看冻结，失败后还会把余额减成负数；如果视频只去冻一笔，生图仍可能把同一笔余额花掉。所以视频在同一事务里锁住用户行，直接减少 `balance`，并把同一笔写进 `media_video.escrow`。
 
-1. 冻结。`frozen_balance` 增加售价，条件是可用金额足够，并且账户有分组 11「媒体台」的有效密钥。`balance` 不变。
-2. 结算。上游确认完成后，`balance` 和 `frozen_balance` 同时减少同一金额。余额不会增加。
-3. 解除冻结。上游明确失败、且这笔还没结算时，只减少 `frozen_balance`。这不是余额退款，也没有 `balance = balance + 金额`。
+1. 扣入账本。条件是可用金额够、用户是 active、并且有一把未过期的分组 11「媒体台」密钥，额度与 5 小时 / 1 天 / 7 天限额也够。然后 `balance` 减少售价，密钥的 `quota_used` 和窗口用量加上同一金额。
+2. 结清。上游确认完成后只把账本改成 `settled`，不再扣第二次。
+3. 退回。上游明确失败时，`balance` 加回账本上的原金额，只加一次。已结清或已退回的行不会再加。文哥已明确允许这一次自动退回。超时、5xx、重定向和其他结果不明的情况不退、也不再 POST，账本保持 `held`，浏览器关掉或进程重启后仍能按幂等键找到。
 
-结果不明的提交保持冻结，不结算，不解除，也不再 POST。账本行还在，所以这不是一笔被藏起来的余额扣费，但可用金额会一直少着，直到另一次明确许可后再处理。程序里没有把余额加回去的语句。`VIDEO_BILLING_ADAPTER` 默认 `off`。
+用户更新仍会触发 `enqueue_user_auth_cache_invalidation()`。0.2.24 里 status、role、deleted_at 都没变时函数直接返回。这里没有 `SECURITY DEFINER` 函数。运行角色的 `search_path` 固定为 `pg_catalog, media_video, public`，语句都写了 schema。角色不能改 `frozen_balance`，不能改用户状态，也不能读密钥原文。应用只把登录令牌对应的用户编号传进 SQL，不采用浏览器传来的用户编号。
 
 ## 部署
 
