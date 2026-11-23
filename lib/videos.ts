@@ -40,19 +40,30 @@ const UPSTREAM_ID = /^[A-Za-z0-9_-]{1,128}$/;
  * Returns null when the model/duration is not on the configured sale table.
  * 768p always sends 1344x768. Unpriced combinations are not given a body.
  */
-export function supergptVideoCreateBody(input: { model: string; prompt: string; duration: number }): Record<string, string> | null {
+export type SuperGptVideoBody = {
+  model: string;
+  prompt: string;
+  seconds: number;
+  size: string;
+};
+
+/**
+ * Recovered successful body. `seconds` is a JSON number. There is no `duration` field.
+ * muse-video 10s uses size 1280x720. minimax-h3-base-fast 10s uses 1344x768.
+ */
+export function supergptVideoCreateBody(input: { model: string; prompt: string; duration: number }): SuperGptVideoBody | null {
   if (!isVerifiedVideoRequest(input.model, input.duration)) return null;
   const spec = videoSpec(input.model);
   if (!spec || !spec.durations.includes(input.duration)) return null;
-  const size = VIDEO_PIXEL_SIZE[spec.resolution];
-  if (spec.resolution === "768p" && size !== "1344x768") return null;
+  const size = spec.id === "muse-video" ? "1280x720" : VIDEO_PIXEL_SIZE[spec.resolution];
+  if (spec.id === "minimax-h3-base-fast" && size !== "1344x768") return null;
   if (!/^\d+x\d+$/.test(size) || size === "1366x768") return null;
   const prompt = input.prompt.trim();
   if (!prompt || prompt.length > 2000) return null;
   return {
     model: spec.id,
     prompt,
-    seconds: String(input.duration),
+    seconds: input.duration,
     size,
   };
 }

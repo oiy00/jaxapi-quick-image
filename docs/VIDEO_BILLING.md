@@ -1,6 +1,26 @@
-# 视频扣费：能用什么，不能用什么
+# 视频账本：冻结、结算、解除冻结
 
-这篇是部署约束，不是上线许可。本仓库不连接生产库，不改 Sub2API 容器，也不执行退款 SQL。
+这篇给运维审查。云端不会执行生产 SQL，也不会用管理员账号连接数据库。
+
+## 为什么不用现成的扣费入口
+
+生图是 Sub2API 在 `/v1/images/*` 里自己扣 `users.balance`。视频不能走 `/v1/videos`，也不能走分组里的美元/秒价。0.2.24 的 `DeductBalance` 先按 `balance >= amount` 扣，失败后再无条件把余额减成负数，而且不看 `frozen_balance`。所以视频不调用它，也不写 `usage_logs`：那张表要求 `account_id`，视频分辨率注释只覆盖 480p/720p/1080p，写入还会触发分组用量汇总。`billing_usage_entries` 和 `idempotency_records` 也不是钱包流水。`batch_image_jobs` 的冻结字段没有用户外键，幂等键也不唯一，不能拿来用。
+
+## 本应用的三步
+
+可用金额是 `balance - frozen_balance`。同一事务里 `SELECT ... FOR UPDATE` 锁住用户行，再按条件更新，避免和 Sub2API 的余额更新互相覆盖。只改 `balance`、`frozen_balance`、`updated_at`。0.2.24 的 `enqueue_user_auth_cache_invalidation()` 会在每次用户更新时执行，但 status、role、deleted_at 都没变时直接返回，不会写 outbox。
+
+1. 冻结。`frozen_balance` 增加售价，条件是可用金额足够，并且账户有分组 11「媒体台」的有效密钥。`balance` 不变。
+2. 结算。上游确认完成后，`balance` 和 `frozen_balance` 同时减少同一金额。余额不会增加。
+3. 解除冻结。上游明确失败、且这笔还没结算时，只减少 `frozen_balance`。这不是余额退款，也没有 `balance = balance + 金额`。
+
+结果不明的提交保持冻结，不结算，不解除，也不再 POST。账本行还在，所以这不是一笔被藏起来的余额扣费，但可用金额会一直少着，直到另一次明确许可后再处理。程序里没有把余额加回去的语句。`VIDEO_BILLING_ADAPTER` 默认 `off`。
+
+## 部署
+
+库在现有网络 `sub2api-local_sub2api-network` 里，别名 `postgres` 或 `sub2api-postgres`，端口 5432 不映射到宿主机。前端 compose 只加入这个外部网络，不重建 Sub2API。运行时使用 `media_video_billing`，密码不要写进仓库。语句在 [deploy/sql/001_media_video_holds.sql](../deploy/sql/001_media_video_holds.sql)。回滚说明在 `001_rollback.sql`：关掉适配器，不要对 `users.balance` 做手工退款。
+
+任务文件仍要挂到 `/data`。没有卷、没有审查过的角色之前，不要把适配器改成 `postgres`。
 
 ## 现有账户扣费
 

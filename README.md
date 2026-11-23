@@ -27,7 +27,7 @@ npm run build
 
 可以提交的只有已完成过的两档：`muse-video` 10 秒，`minimax-h3-base-fast` 10 秒（尺寸 `1344x768`）。其余档位显示售价，但按钮关闭。`/api/jax` 不转发视频路径。浏览器里的 `requestVideo()` 会拒绝。
 
-真实提交还要 `VIDEO_BILLING_ADAPTER=http` 指向一个已核实的原子扣费服务，以及挂载 `/data`。默认 `off`，此时 `/api/videos` 返回 503，不会请求 SuperGPT。`/api/mock/videos` 返回 410，不会在失败时播放样片。
+真实提交使用 Postgres 里的冻结账本：先增加 `frozen_balance`，完成后再同时减少余额和冻结，明确失败只解除冻结，不会把余额加回去。适配器默认 `off`。审查并配置 `media_video_billing` 之后才改成 `postgres`。`/api/mock/videos` 返回 410。
 
 限制和扣费缺口见 [docs/VIDEO_STATUS.md](docs/VIDEO_STATUS.md) 与 [docs/VIDEO_BILLING.md](docs/VIDEO_BILLING.md)。
 

@@ -1,0 +1,7 @@
+-- Rollback notes. Do not run a balance credit.
+-- 1. Set VIDEO_BILLING_ADAPTER=off and restart only jaxapi-quick-image.
+-- 2. Leave media_video.holds in place. Rows in state held are freezes, not charges.
+-- 3. Do not UPDATE users.balance to "refund" those rows. Releasing a hold is
+--    frozen_balance = frozen_balance - amount, and only for rows this app marked held.
+-- 4. Do not drop the schema while any row is still held or settle_blocked.
+-- 5. Do not recreate or upgrade the Sub2API container.

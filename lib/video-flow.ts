@@ -3,8 +3,8 @@ import { videoGroupRejection } from "./keys.ts";
 import { estimateVideoCost } from "./pricing.ts";
 import { isVerifiedVideoRequest } from "./video-models.ts";
 import { createSuperGptVideo, pollSuperGptVideo, readSuperGptContent, type ContentOutcome, type CreateOutcome, type PollOutcome } from "./supergpt-video.ts";
-import { supergptVideoCreateBody } from "./videos.ts";
-import { BillingAmbiguous, ReverseAmbiguous, type BillingPort } from "./video-billing-port.ts";
+import { supergptVideoCreateBody, type SuperGptVideoBody } from "./videos.ts";
+import { BillingAmbiguous, ReleaseAmbiguous, type BillingPort } from "./video-billing-port.ts";
 import { nextAction, type VideoJob } from "./video-job.ts";
 import { FileJobStore } from "./video-store.ts";
 
@@ -20,6 +20,7 @@ export type PublicVideoJob = {
   size: string;
   priceUsd: number;
   debitState: VideoJob["debitState"];
+  balanceCharged: boolean;
   error: string | null;
   upstreamKnown: boolean;
 };
@@ -31,7 +32,7 @@ export type FlowResult = FlowOk | FlowErr;
 export type VideoCaller = { userId: number; groupId: number; groupName: string };
 
 export type VideoUpstream = {
-  create(body: Record<string, string>): Promise<CreateOutcome>;
+  create(body: SuperGptVideoBody): Promise<CreateOutcome>;
   poll(upstreamId: string): Promise<PollOutcome>;
   content(upstreamId: string): Promise<ContentOutcome>;
 };
@@ -150,9 +151,13 @@ export class VideoFlow {
         if (posted?.status === "failed") continue;
         return posted ? present(posted) : fail(404, "missing", "没有找到这个任务。");
       }
-      if (action === "reverse") {
-        await this.applyReverse(job);
+      if (action === "release") {
+        await this.applyRelease(job);
         continue;
+      }
+      if (action === "settle") {
+        await this.applySettle(job);
+        return present((await this.store.transact((book) => book.getById(jobId))) ?? job);
       }
       const polled = await this.applyPoll(job);
       if (polled === "stop") break;
@@ -162,9 +167,9 @@ export class VideoFlow {
   }
 
   private async applyDebit(job: VideoJob): Promise<void> {
-    let result: Awaited<ReturnType<BillingPort["debit"]>>;
+    let result: Awaited<ReturnType<BillingPort["hold"]>>;
     try {
-      result = await this.billing.debit({ userId: job.userId, amountUsd: job.priceUsd, idempotencyKey: job.id });
+      result = await this.billing.hold({ userId: job.userId, amountUsd: job.priceUsd, idempotencyKey: job.id });
     } catch (error) {
       if (error instanceof BillingAmbiguous) {
         await this.store.transact((book) => {
@@ -181,14 +186,14 @@ export class VideoFlow {
     }
     await this.store.transact((book) => {
       const current = book.getById(job.id);
-      if (!current || current.debitState === "debited" || current.debitState === "reversed") return;
+      if (!current || current.debitState === "held" || current.debitState === "settled" || current.debitState === "released") return;
       current.balanceAfter = result.balance;
       current.updatedAt = this.now();
       if (!result.ok) {
         current.status = "failed";
-        current.error = "余额不足，没有向视频上游提交。";
+        current.error = "可用余额不足（余额减去冻结）。没有冻结，也没有向视频上游提交。";
       } else {
-        current.debitState = "debited";
+        current.debitState = "held";
         current.status = "held";
         current.error = null;
       }
@@ -199,7 +204,7 @@ export class VideoFlow {
   private async applyPost(job: VideoJob): Promise<void> {
     const claimed = await this.store.transact((book) => {
       const current = book.getById(job.id);
-      if (!current || current.upstreamAttempted || current.upstreamId || current.debitState !== "debited") return false;
+      if (!current || current.upstreamAttempted || current.upstreamId || current.debitState !== "held") return false;
       current.upstreamAttempted = true;
       current.status = "upstream_unknown";
       current.updatedAt = this.now();
@@ -231,15 +236,15 @@ export class VideoFlow {
     });
   }
 
-  private async applyReverse(job: VideoJob): Promise<void> {
-    let result: Awaited<ReturnType<BillingPort["reverse"]>>;
+  private async applyRelease(job: VideoJob): Promise<void> {
+    let result: Awaited<ReturnType<BillingPort["release"]>>;
     try {
-      result = await this.billing.reverse({ userId: job.userId, amountUsd: job.priceUsd, idempotencyKey: job.id });
+      result = await this.billing.release({ userId: job.userId, amountUsd: job.priceUsd, idempotencyKey: job.id });
     } catch (error) {
-      if (error instanceof ReverseAmbiguous) {
+      if (error instanceof ReleaseAmbiguous) {
         await this.store.transact((book) => {
           const current = book.getById(job.id);
-          if (!current || current.reversalUnknown || current.debitState !== "debited") return;
+          if (!current || current.reversalUnknown || current.debitState !== "held") return;
           current.reversalUnknown = true;
           current.error = error.message;
           current.updatedAt = this.now();
@@ -251,15 +256,52 @@ export class VideoFlow {
     }
     await this.store.transact((book) => {
       const current = book.getById(job.id);
-      if (!current || current.debitState === "reversed") return;
+      if (!current || current.debitState === "released" || current.debitState === "settled") return;
       current.updatedAt = this.now();
       current.balanceAfter = result.balance;
       if (result.ok) {
-        current.debitState = "reversed";
+        current.debitState = "released";
         current.reversalUnknown = false;
+        current.error = current.error || "上游已明确失败。冻结已解除，余额没有增加。";
       } else {
         current.reversalUnknown = true;
-        current.error = current.error || "没有找到可退的扣费。没有再次退款。";
+        current.error = current.error || "没有找到可解除的冻结。余额没有增加。";
+      }
+      book.save(current);
+    });
+  }
+
+  private async applySettle(job: VideoJob): Promise<void> {
+    let result: Awaited<ReturnType<BillingPort["settle"]>>;
+    try {
+      result = await this.billing.settle({ userId: job.userId, amountUsd: job.priceUsd, idempotencyKey: job.id });
+    } catch (error) {
+      if (error instanceof BillingAmbiguous) {
+        await this.store.transact((book) => {
+          const current = book.getById(job.id);
+          if (!current || current.debitState !== "held") return;
+          current.reversalUnknown = true;
+          current.error = error.message;
+          current.updatedAt = this.now();
+          book.save(current);
+        });
+        return;
+      }
+      throw error;
+    }
+    await this.store.transact((book) => {
+      const current = book.getById(job.id);
+      if (!current || current.debitState === "settled") return;
+      current.updatedAt = this.now();
+      current.balanceAfter = result.balance;
+      if (result.ok) {
+        current.debitState = "settled";
+        current.error = null;
+      } else if (result.code === "settle_blocked") {
+        current.error = "视频已完成，但冻结没能转成扣费。余额没有增加，冻结仍留在账上。";
+      } else {
+        current.reversalUnknown = true;
+        current.error = current.error || "没有找到可结算的冻结。余额没有增加。";
       }
       book.save(current);
     });
@@ -282,6 +324,7 @@ export class VideoFlow {
         current.status = "completed";
         current.progress = 100;
         current.error = null;
+        next = "continue";
       } else {
         current.status = "failed";
         current.error = outcome.message;
@@ -320,6 +363,7 @@ function publish(job: VideoJob): PublicVideoJob {
     size: job.size,
     priceUsd: job.priceUsd,
     debitState: job.debitState,
+    balanceCharged: job.debitState === "settled",
     error: job.error,
     upstreamKnown: Boolean(job.upstreamId),
   };

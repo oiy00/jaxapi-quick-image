@@ -24,10 +24,19 @@ services:
       SUPERGPT_USER_AGENT: curl/8.5.0
       VIDEO_BILLING_ADAPTER: "off"
       VIDEO_JOB_STORE: /data/video-jobs.json
+      # VIDEO_DATABASE_URL is injected at runtime for role media_video_billing.
+      # Host is the existing postgres alias. Do not publish 5432.
     volumes:
       - /opt/jaxapi-quick-image/data:/data
+    networks:
+      - sub2api
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:43123/image/api/health"]
       interval: 30s
       timeout: 5s
       retries: 5
+
+networks:
+  sub2api:
+    external: true
+    name: sub2api-local_sub2api-network

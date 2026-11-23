@@ -1,4 +1,4 @@
-export type DebitState = "none" | "debited" | "reversed";
+export type DebitState = "none" | "held" | "settled" | "released";
 
 export type JobStatus =
   | "reserved"
@@ -32,16 +32,20 @@ export type VideoJob = {
   updatedAt: string;
 };
 
-export type JobAction = "respond" | "debit" | "post" | "reverse" | "poll";
+export type JobAction = "respond" | "debit" | "post" | "release" | "settle" | "poll";
 
 export function nextAction(job: VideoJob): JobAction {
-  if (job.status === "completed" || job.status === "debit_unknown" || job.status === "upstream_unknown") return "respond";
+  if (job.status === "debit_unknown" || job.status === "upstream_unknown") return "respond";
+  if (job.status === "completed") {
+    if (job.debitState === "held" && !job.reversalUnknown) return "settle";
+    return "respond";
+  }
   if (job.status === "failed") {
-    if (job.debitState === "debited" && !job.reversalUnknown) return "reverse";
+    if (job.debitState === "held" && !job.reversalUnknown) return "release";
     return "respond";
   }
   if (job.debitState === "none") return "debit";
-  if (job.debitState === "reversed") return "respond";
+  if (job.debitState === "released" || job.debitState === "settled") return "respond";
   if (!job.upstreamAttempted) return "post";
   if (!job.upstreamId) return "respond";
   if (job.status === "reserved" || job.status === "held" || job.status === "queued" || job.status === "in_progress") {

@@ -1,8 +1,9 @@
 import { fetchRelayMediaGrant, type RelayGrant } from "./relay-account.ts";
 import { readVideoConfig, type LiveVideoConfig } from "./video-config.ts";
-import { HttpBilling } from "./video-billing-port.ts";
+import { PostgresBilling } from "./postgres-billing.ts";
 import { VideoFlow, superGptUpstream, type FlowResult } from "./video-flow.ts";
 import { FileJobStore } from "./video-store.ts";
+import pg from "pg";
 
 export type VideoHttpDeps = {
   authenticate(token: string): Promise<RelayGrant>;
@@ -90,12 +91,22 @@ export function liveVideoDeps(env: NodeJS.ProcessEnv = process.env, fetchImpl: t
   };
 }
 
+const pools = new Map<string, pg.Pool>();
+
 export function createLiveFlow(config: LiveVideoConfig, fetchImpl: typeof fetch = fetch): VideoFlow {
   return new VideoFlow(
     new FileJobStore(config.storePath),
-    new HttpBilling(config.billingUrl, config.billingToken, fetchImpl),
+    new PostgresBilling(poolFor(config.databaseUrl)),
     superGptUpstream({ baseUrl: config.supergptBase, apiKey: config.supergptKey, fetchImpl }),
   );
+}
+
+function poolFor(databaseUrl: string): pg.Pool {
+  const existing = pools.get(databaseUrl);
+  if (existing) return existing;
+  const pool = new pg.Pool({ connectionString: databaseUrl, max: 4, application_name: "jaxapi-quick-image" });
+  pools.set(databaseUrl, pool);
+  return pool;
 }
 
 async function gateFlow(request: Request, deps: VideoHttpDeps): Promise<Response | { flow: VideoFlow; userId: number }> {

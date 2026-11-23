@@ -1,4 +1,4 @@
-import { isSafeUpstreamVideoId, parseVideoJob, supergptVideoCreateBody } from "./videos.ts";
+import { isSafeUpstreamVideoId, parseVideoJob, supergptVideoCreateBody, type SuperGptVideoBody } from "./videos.ts";
 
 export const SUPERGPT_HOST = "api.supergpt.dev";
 export const SUPERGPT_USER_AGENT = "curl/8.5.0";
@@ -47,7 +47,7 @@ export function videoContentUrl(base: string, upstreamId: string): string | null
 export async function createSuperGptVideo(input: {
   baseUrl: string;
   apiKey: string;
-  body: Record<string, string>;
+  body: SuperGptVideoBody;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
 }): Promise<CreateOutcome> {
@@ -57,7 +57,7 @@ export async function createSuperGptVideo(input: {
     response = await fetchImpl(videoCollectionUrl(input.baseUrl), {
       method: "POST",
       redirect: "manual",
-      headers: upstreamHeaders(input.apiKey),
+      headers: upstreamHeaders(input.apiKey, "application/json"),
       body: JSON.stringify(input.body),
       signal: AbortSignal.timeout(input.timeoutMs ?? 30_000),
     });
@@ -96,7 +96,7 @@ export async function pollSuperGptVideo(input: {
     response = await fetchImpl(url, {
       method: "GET",
       redirect: "manual",
-      headers: upstreamHeaders(input.apiKey),
+      headers: upstreamHeaders(input.apiKey, "application/json"),
       signal: AbortSignal.timeout(input.timeoutMs ?? 20_000),
     });
   } catch {
@@ -134,7 +134,7 @@ export async function readSuperGptContent(input: {
     response = await fetchImpl(url, {
       method: "GET",
       redirect: "manual",
-      headers: upstreamHeaders(input.apiKey),
+      headers: upstreamHeaders(input.apiKey, "*/*"),
       signal: AbortSignal.timeout(input.timeoutMs ?? 60_000),
     });
   } catch {
@@ -157,15 +157,15 @@ export async function readSuperGptContent(input: {
   return { kind: "ready", contentType: contentType.split(";")[0] || "application/octet-stream", body: bytes };
 }
 
-export function createBodyOrNull(input: { model: string; prompt: string; duration: number }): Record<string, string> | null {
+export function createBodyOrNull(input: { model: string; prompt: string; duration: number }): SuperGptVideoBody | null {
   return supergptVideoCreateBody(input);
 }
 
-function upstreamHeaders(apiKey: string): Headers {
+function upstreamHeaders(apiKey: string, accept: string): Headers {
   const headers = new Headers();
   headers.set("authorization", `Bearer ${apiKey}`);
   headers.set("content-type", "application/json");
-  headers.set("accept", "*/*");
+  headers.set("accept", accept);
   headers.set("user-agent", SUPERGPT_USER_AGENT);
   return headers;
 }

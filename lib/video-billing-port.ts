@@ -1,158 +1,135 @@
-export type DebitResult =
-  | { ok: true; balance: number; alreadyApplied: boolean }
-  | { ok: false; code: "insufficient"; balance: number };
+import { addMoney, compareMoney, moneyEquals, moneyFromNumber, moneyToNumber, subMoney, type Money } from "./money.ts";
 
-export type ReverseResult =
-  | { ok: true; balance: number; alreadyReversed: boolean }
-  | { ok: false; code: "not_debited"; balance: number };
+export type HoldResult =
+  | { ok: true; balance: number; frozen: number; alreadyApplied: boolean }
+  | { ok: false; code: "insufficient"; balance: number; frozen: number };
+
+export type SettleResult =
+  | { ok: true; balance: number; frozen: number; alreadyApplied: boolean }
+  | { ok: false; code: "settle_blocked" | "not_held"; balance: number; frozen: number };
+
+export type ReleaseResult =
+  | { ok: true; balance: number; frozen: number; alreadyReleased: boolean }
+  | { ok: false; code: "not_held"; balance: number; frozen: number };
 
 export class BillingAmbiguous extends Error {
-  constructor(message = "扣费结果不明，没有向视频上游提交，也没有自动再扣一次。") {
+  constructor(message = "冻结结果不明，没有向视频上游提交，也没有自动再冻一次。") {
     super(message);
     this.name = "BillingAmbiguous";
   }
 }
 
-export class ReverseAmbiguous extends Error {
-  constructor(message = "退款结果不明。没有自动再退一次。") {
+export class ReleaseAmbiguous extends Error {
+  constructor(message = "解除冻结的结果不明。没有改动余额，也没有自动再解一次。") {
     super(message);
-    this.name = "ReverseAmbiguous";
+    this.name = "ReleaseAmbiguous";
   }
 }
 
 export type BillingPort = {
-  debit(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<DebitResult>;
-  reverse(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<ReverseResult>;
+  /** Freeze available funds. Does not decrease users.balance. */
+  hold(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<HoldResult>;
+  /** Convert a hold into a balance charge. Does not increase balance. */
+  settle(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<SettleResult>;
+  /** Drop a hold that was never settled. Does not increase balance. */
+  release(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<ReleaseResult>;
 };
 
-type Charge = { userId: number; amount: number; state: "debited" | "reversed" | "rejected" };
+type Wallet = { balance: Money; frozen: Money };
+type Charge = { userId: number; amount: Money; state: "held" | "settled" | "released" | "rejected" };
 
-/** In-process atomic ledger. Tests only. Not a jaxapi account. */
+/**
+ * Same hold, settle, and release rules as the Postgres ledger.
+ * Used by flow tests. Production uses PostgresBilling.
+ */
 export class MemoryBilling implements BillingPort {
-  private balances = new Map<number, number>();
+  private wallets = new Map<number, Wallet>();
   private charges = new Map<string, Charge>();
 
   constructor(opening: Record<number, number> = {}) {
-    for (const [userId, amount] of Object.entries(opening)) this.balances.set(Number(userId), amount);
+    for (const [userId, amount] of Object.entries(opening)) {
+      this.wallets.set(Number(userId), { balance: moneyFromNumber(amount), frozen: moneyFromNumber(0) });
+    }
   }
 
   balanceOf(userId: number): number {
-    return this.balances.get(userId) ?? 0;
+    return moneyToNumber(this.wallet(userId).balance);
   }
 
-  async debit(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<DebitResult> {
+  frozenOf(userId: number): number {
+    return moneyToNumber(this.wallet(userId).frozen);
+  }
+
+  async hold(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<HoldResult> {
+    const amount = moneyFromNumber(input.amountUsd);
     const existing = this.charges.get(input.idempotencyKey);
-    if (existing?.state === "debited" || existing?.state === "reversed") {
-      return { ok: true, balance: this.balanceOf(existing.userId), alreadyApplied: true };
+    if (existing && (existing.userId !== input.userId || !moneyEquals(existing.amount, amount))) {
+      throw new BillingAmbiguous("幂等键已被另一笔金额占用。");
+    }
+    if (existing?.state === "held" || existing?.state === "settled" || existing?.state === "released") {
+      const wallet = this.wallet(existing.userId);
+      return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: true };
     }
     if (existing?.state === "rejected") {
-      return { ok: false, code: "insufficient", balance: this.balanceOf(existing.userId) };
+      const wallet = this.wallet(existing.userId);
+      return { ok: false, code: "insufficient", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    const balance = this.balanceOf(input.userId);
-    if (!(input.amountUsd > 0) || balance + 1e-9 < input.amountUsd) {
-      this.charges.set(input.idempotencyKey, { userId: input.userId, amount: input.amountUsd, state: "rejected" });
-      return { ok: false, code: "insufficient", balance };
+    const wallet = this.wallet(input.userId);
+    const available = subMoney(wallet.balance, wallet.frozen);
+    if (compareMoney(available, amount) < 0) {
+      this.charges.set(input.idempotencyKey, { userId: input.userId, amount, state: "rejected" });
+      return { ok: false, code: "insufficient", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    const next = roundMoney(balance - input.amountUsd);
-    this.balances.set(input.userId, next);
-    this.charges.set(input.idempotencyKey, { userId: input.userId, amount: input.amountUsd, state: "debited" });
-    return { ok: true, balance: next, alreadyApplied: false };
+    wallet.frozen = addMoney(wallet.frozen, amount);
+    this.charges.set(input.idempotencyKey, { userId: input.userId, amount, state: "held" });
+    return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: false };
   }
 
-  async reverse(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<ReverseResult> {
+  async settle(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<SettleResult> {
+    const amount = moneyFromNumber(input.amountUsd);
     const existing = this.charges.get(input.idempotencyKey);
-    if (!existing || existing.state === "rejected") {
-      return { ok: false, code: "not_debited", balance: this.balanceOf(input.userId) };
+    const wallet = this.wallet(input.userId);
+    if (!existing || existing.state === "rejected" || existing.state === "released" || existing.userId !== input.userId) {
+      return { ok: false, code: "not_held", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    if (existing.userId !== input.userId) {
-      return { ok: false, code: "not_debited", balance: this.balanceOf(input.userId) };
+    if (existing.state === "settled") {
+      return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: true };
     }
-    if (existing.state === "reversed") {
-      return { ok: true, balance: this.balanceOf(input.userId), alreadyReversed: true };
+    if (compareMoney(wallet.frozen, amount) < 0 || compareMoney(wallet.balance, amount) < 0) {
+      return { ok: false, code: "settle_blocked", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    if (Math.abs(existing.amount - input.amountUsd) > 1e-9) {
-      throw new ReverseAmbiguous("退款金额和原扣费不一致，没有退款。");
+    wallet.balance = subMoney(wallet.balance, amount);
+    wallet.frozen = subMoney(wallet.frozen, amount);
+    existing.state = "settled";
+    return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyApplied: false };
+  }
+
+  async release(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<ReleaseResult> {
+    const amount = moneyFromNumber(input.amountUsd);
+    const existing = this.charges.get(input.idempotencyKey);
+    const wallet = this.wallet(input.userId);
+    const balanceBefore = wallet.balance;
+    if (!existing || existing.state === "rejected" || existing.state === "settled" || existing.userId !== input.userId) {
+      return { ok: false, code: "not_held", balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen) };
     }
-    const next = roundMoney(this.balanceOf(input.userId) + existing.amount);
-    this.balances.set(input.userId, next);
-    existing.state = "reversed";
-    return { ok: true, balance: next, alreadyReversed: false };
+    if (existing.state === "released") {
+      return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyReleased: true };
+    }
+    if (!moneyEquals(existing.amount, amount) || compareMoney(wallet.frozen, amount) < 0) {
+      throw new ReleaseAmbiguous("冻结金额对不上，没有改余额。");
+    }
+    wallet.frozen = subMoney(wallet.frozen, amount);
+    if (!moneyEquals(wallet.balance, balanceBefore)) throw new Error("release must not change balance");
+    existing.state = "released";
+    return { ok: true, balance: moneyToNumber(wallet.balance), frozen: moneyToNumber(wallet.frozen), alreadyReleased: false };
+  }
+
+  private wallet(userId: number): Wallet {
+    const found = this.wallets.get(userId);
+    if (found) return found;
+    const created = { balance: moneyFromNumber(0), frozen: moneyFromNumber(0) };
+    this.wallets.set(userId, created);
+    return created;
   }
 }
 
-export function roundMoney(value: number): number {
-  return Math.round(value * 1e6) / 1e6;
-}
-
-type FetchLike = typeof fetch;
-
-/**
- * Ops-provided billing service. This process does not run refund SQL.
- * POST debit and reverse must be idempotent on idempotencyKey.
- * Redirects are not followed.
- */
-export class HttpBilling implements BillingPort {
-  private readonly baseUrl: string;
-  private readonly token: string;
-  private readonly fetchImpl: FetchLike;
-
-  constructor(baseUrl: string, token: string, fetchImpl: FetchLike = fetch) {
-    this.baseUrl = baseUrl;
-    this.token = token;
-    this.fetchImpl = fetchImpl;
-  }
-
-  debit(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<DebitResult> {
-    return this.post("debit", input) as Promise<DebitResult>;
-  }
-
-  reverse(input: { userId: number; amountUsd: number; idempotencyKey: string }): Promise<ReverseResult> {
-    return this.post("reverse", input) as Promise<ReverseResult>;
-  }
-
-  private async post(action: "debit" | "reverse", input: { userId: number; amountUsd: number; idempotencyKey: string }) {
-    const url = new URL(action, this.baseUrl.endsWith("/") ? this.baseUrl : `${this.baseUrl}/`);
-    if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") {
-      throw new BillingAmbiguous("计费地址必须是 https，或本机回环。");
-    }
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url, {
-        method: "POST",
-        redirect: "manual",
-        headers: {
-          authorization: `Bearer ${this.token}`,
-          "content-type": "application/json",
-          accept: "application/json",
-          "user-agent": "curl/8.5.0",
-        },
-        body: JSON.stringify({
-          userId: input.userId,
-          amountUsd: input.amountUsd,
-          idempotencyKey: input.idempotencyKey,
-          groupId: 11,
-        }),
-      });
-    } catch {
-      throw action === "debit" ? new BillingAmbiguous() : new ReverseAmbiguous();
-    }
-    if (response.status >= 300 && response.status < 400) {
-      throw action === "debit" ? new BillingAmbiguous("计费接口返回了重定向，没有跟随。") : new ReverseAmbiguous("退款接口返回了重定向，没有跟随。");
-    }
-    const payload = await response.json().catch(() => null);
-    const record = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-    const balance = typeof record.balance === "number" ? record.balance : 0;
-    if (action === "debit") {
-      if (response.status === 402 || record.code === "insufficient") return { ok: false, code: "insufficient", balance };
-      if (response.ok && record.ok !== false) {
-        return { ok: true, balance, alreadyApplied: record.alreadyApplied === true };
-      }
-      throw new BillingAmbiguous();
-    }
-    if (response.ok && record.ok !== false) {
-      return { ok: true, balance, alreadyReversed: record.alreadyReversed === true };
-    }
-    if (record.code === "not_debited") return { ok: false, code: "not_debited", balance };
-    throw new ReverseAmbiguous();
-  }
-}
