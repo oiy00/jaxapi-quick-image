@@ -1,0 +1,26 @@
+# Standalone frontend only. Do NOT add this to the Sub2API compose file in a
+# way that causes `docker compose up -d` to recreate weishaw/sub2api:0.2.18
+# (that would roll the in-place 0.2.24 binary back).
+#
+# Suggested path on the server: /opt/jaxapi-quick-image/docker-compose.yml
+# Bind to localhost only. This file does not change Caddy and does not restore the public /image route.
+
+services:
+  jaxapi-quick-image:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jaxapi-quick-image:local
+    container_name: jaxapi-quick-image
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:43123:43123"
+    environment:
+      JAXAPI_BASE_URL: https://jaxapi.top
+      NEXT_PUBLIC_BASE_PATH: /image
+      NEXT_PUBLIC_API_MODE: same-origin
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:43123/image/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
