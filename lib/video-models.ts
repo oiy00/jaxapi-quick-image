@@ -8,7 +8,7 @@ export type VideoModelSpec = {
   resolution: VideoResolution;
   /** Allowed clip lengths in seconds. */
   durations: number[];
-  /** Absolute media-desk sell price in USD per request (cost × 2). */
+  /** Configured absolute customer sell price in USD per request. Do not multiply again. */
   prices: Record<number, number>;
 };
 
@@ -68,17 +68,32 @@ export const VIDEO_MODELS: VideoModelSpec[] = [
   { id: "minimax-h3-origin-quality", label: "minimax-h3-origin-quality", ...MINIMAX_BASE, prices: { 5: 1.5, 10: 3.0, 15: 4.5 } },
 ];
 
-export const DEFAULT_VIDEO_MODEL: VideoModelId = "video-ray";
+export const DEFAULT_VIDEO_MODEL: VideoModelId = "muse-video";
 
 /**
- * Display-only pixel sizes. Not a SuperGPT field and not sent by this app.
- * 768p follows the official MiniMax H3 16:9 size (1344x768); 1366x768 is rejected upstream.
+ * Pixel size sent as SuperGPT `size`.
+ * 768p must be the MiniMax H3 16:9 size 1344x768. 1366x768 is rejected upstream.
+ * 720p and 2k use the configured sizes below; 2k was not re-verified in this change.
  */
 export const VIDEO_PIXEL_SIZE: Record<VideoResolution, string> = {
   "720p": "1280x720",
   "768p": "1344x768",
   "2k": "2560x1440",
 };
+
+/**
+ * Saved probes that actually finished.
+ * muse-video 10s and minimax-h3-base-fast 10s completed.
+ * video-ray never completed. Other priced rows stay visible but cannot be submitted.
+ */
+export const VERIFIED_VIDEO_REQUESTS: { id: VideoModelId; duration: number }[] = [
+  { id: "muse-video", duration: 10 },
+  { id: "minimax-h3-base-fast", duration: 10 },
+];
+
+export function isVerifiedVideoRequest(model: string, duration: number): boolean {
+  return VERIFIED_VIDEO_REQUESTS.some((item) => item.id === model && item.duration === duration);
+}
 
 export function isVideoModelId(value: string): value is VideoModelId {
   return VIDEO_MODELS.some((item) => item.id === value);

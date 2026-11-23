@@ -1,4 +1,4 @@
-import { defaultDuration, videoSpec, videoTierLabel } from "./video-models.ts";
+import { VIDEO_PIXEL_SIZE, defaultDuration, isVerifiedVideoRequest, videoSpec, videoTierLabel } from "./video-models.ts";
 
 export type VideoJobStatus = "queued" | "in_progress" | "completed" | "failed" | string;
 
@@ -31,6 +31,34 @@ export function createVideoPayload(input: { model: string; prompt: string; durat
     resolution: spec.resolution,
     tier_label: videoTierLabel(spec.id, duration),
   };
+}
+
+const UPSTREAM_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * Body for SuperGPT POST /v1/videos.
+ * Returns null when the model/duration is not on the configured sale table.
+ * 768p always sends 1344x768. Unpriced combinations are not given a body.
+ */
+export function supergptVideoCreateBody(input: { model: string; prompt: string; duration: number }): Record<string, string> | null {
+  if (!isVerifiedVideoRequest(input.model, input.duration)) return null;
+  const spec = videoSpec(input.model);
+  if (!spec || !spec.durations.includes(input.duration)) return null;
+  const size = VIDEO_PIXEL_SIZE[spec.resolution];
+  if (spec.resolution === "768p" && size !== "1344x768") return null;
+  if (!/^\d+x\d+$/.test(size) || size === "1366x768") return null;
+  const prompt = input.prompt.trim();
+  if (!prompt || prompt.length > 2000) return null;
+  return {
+    model: spec.id,
+    prompt,
+    seconds: String(input.duration),
+    size,
+  };
+}
+
+export function isSafeUpstreamVideoId(value: string): boolean {
+  return UPSTREAM_ID.test(value);
 }
 
 export function parseVideoJob(payload: unknown): VideoJob | null {

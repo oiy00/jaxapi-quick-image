@@ -78,7 +78,15 @@ export default function PreviewPage() {
         count: FIXED_COUNT,
       })}
       run={run}
-      videoDesk={<VideoDesk userId="preview" groupName="媒体台" accountBalance={12.5} enabled />}
+      videoDesk={
+        <VideoDesk
+          accessToken=""
+          userId="preview"
+          accountBalance={12.5}
+          enabled={false}
+          blockedReason="预览页不发起视频请求，也不会扣费。"
+        />
+      }
       onGenerate={() => {
         if (!draft.prompt.trim()) return;
         const startedAt = Date.now();

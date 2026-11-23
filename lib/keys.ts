@@ -3,6 +3,10 @@ import type { ApiGroup, ApiKeyRecord } from "./types";
 const IMAGE_PLATFORMS = new Set(["openai", "grok", "composite"]);
 
 export const MEDIA_GROUP_NAME = "媒体台";
+/** Live media-station group. Video and new keys may use only this id. */
+export const MEDIA_GROUP_ID = 11;
+/** ChatGPT image group. Never attach a media key or video job to it. */
+export const FORBIDDEN_MEDIA_GROUP_ID = 7;
 export const AUTO_IMAGE_KEY_NAME = "JaxApi 媒体台";
 
 export function isMediaGroup(group: ApiGroup | null | undefined): boolean {
@@ -76,5 +80,32 @@ export function groupAllowsImage(group: ApiGroup): boolean {
 }
 
 export function pickImageGroup(groups: ApiGroup[]): ApiGroup | null {
-  return groups.find((group) => isMediaGroup(group) && groupAllowsImage(group)) ?? null;
+  return (
+    groups.find(
+      (group) =>
+        group.id === MEDIA_GROUP_ID &&
+        isMediaGroup(group) &&
+        groupAllowsImage(group),
+    ) ?? null
+  );
+}
+
+export function videoGroupRejection(group: { id: number; name?: string | null } | null | undefined): "wrong_group" | null {
+  if (!group) return "wrong_group";
+  if (group.id === FORBIDDEN_MEDIA_GROUP_ID) return "wrong_group";
+  if (group.id !== MEDIA_GROUP_ID) return "wrong_group";
+  if ((group.name || "").trim() !== MEDIA_GROUP_NAME) return "wrong_group";
+  return null;
+}
+
+/** Active key on group 11 named 媒体台. Group 7 never qualifies, even if it is also present. */
+export function selectMediaGrant(keys: ApiKeyRecord[]): { ok: true; groupId: number; groupName: string } | { ok: false; code: "wrong_group" } {
+  const eligible = keys.filter((key) => {
+    if (key.status !== "active" || !key.group) return false;
+    if (key.group.status && key.group.status !== "active") return false;
+    return videoGroupRejection(key.group) === null;
+  });
+  const grant = eligible[0];
+  if (!grant?.group) return { ok: false, code: "wrong_group" };
+  return { ok: true, groupId: grant.group.id, groupName: grant.group.name };
 }

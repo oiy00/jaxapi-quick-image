@@ -1,9 +1,10 @@
-# Standalone frontend only. Do NOT add this to the Sub2API compose file in a
-# way that causes `docker compose up -d` to recreate weishaw/sub2api:0.2.18
-# (that would roll the in-place 0.2.24 binary back).
+# Standalone frontend only. Do NOT add this to the Sub2API compose file.
+# Do not recreate or upgrade weishaw/sub2api. Production runs binary 0.2.24
+# from a compose tag that still says 0.2.18; recreating that service is forbidden.
 #
 # Suggested path on the server: /opt/jaxapi-quick-image/docker-compose.yml
-# Bind to localhost only. This file does not change Caddy and does not restore the public /image route.
+# Bind to localhost only. This file does not change Caddy and does not restore the menu.
+# Caddy already proxies /image* to 127.0.0.1:43123.
 
 services:
   jaxapi-quick-image:
@@ -19,6 +20,12 @@ services:
       JAXAPI_BASE_URL: https://jaxapi.top
       NEXT_PUBLIC_BASE_PATH: /image
       NEXT_PUBLIC_API_MODE: same-origin
+      SUPERGPT_BASE_URL: https://api.supergpt.dev/v1
+      SUPERGPT_USER_AGENT: curl/8.5.0
+      VIDEO_BILLING_ADAPTER: "off"
+      VIDEO_JOB_STORE: /data/video-jobs.json
+    volumes:
+      - /opt/jaxapi-quick-image/data:/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:43123/image/api/health"]
       interval: 30s

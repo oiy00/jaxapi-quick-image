@@ -444,11 +444,12 @@ export function AppShell() {
         onGenerate={() => void onGenerate()}
         videoDesk={
           <VideoDesk
+            accessToken={session.accessToken}
             userId={String(user.id)}
-            groupName={selectedKey && isMediaKey(selectedKey) ? selectedKey.group?.name || "" : ""}
             accountBalance={user.balance}
             enabled={Boolean(selectedKey && isMediaKey(selectedKey))}
             blockedReason={connection.state === "blocked" ? connection.summary : undefined}
+            onBalance={(balance) => setUser((current) => (current ? { ...current, balance } : current))}
           />
         }
       />

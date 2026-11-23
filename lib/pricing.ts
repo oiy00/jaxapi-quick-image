@@ -2,8 +2,9 @@ import type { ImageModelId, ImageResolution } from "./types";
 import { videoSpec } from "./video-models.ts";
 
 /**
- * 媒体台绝对售价（美元 / 张）= 上游成本（SuperGPT 标价 × 1.5）× 2。
- * 预估与 Sub2API 分组 model_pricing 对齐，不再乘个人/分组倍率。
+ * Configured absolute customer sell prices in USD per image.
+ * Quotes use these numbers as-is and ignore personal or group multipliers.
+ * Do not derive a new video price from list × 1.5 × 2; video sells from lib/video-models.ts.
  */
 export const MEDIA_IMAGE_PRICES: Record<string, Partial<Record<ImageResolution, number>>> = {
   "gpt-image-2": { "1K": 0.09, "2K": 0.12, "4K": 0.15 },
