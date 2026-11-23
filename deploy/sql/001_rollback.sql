@@ -1,0 +1,9 @@
+-- Rollback. Do not invent extra balance credits.
+-- 1. Set VIDEO_BILLING_ADAPTER=off and restart only jaxapi-quick-image.
+-- 2. Leave media_video.escrow in place.
+--    held rows are already debited from users.balance. Ambiguous rows must stay held:
+--    do not credit them and do not submit the upstream request again.
+--    released rows were credited once by the app after a confirmed failure.
+-- 3. Do not run a second credit for a released or settled row.
+-- 4. Do not drop the schema while any row is still held.
+-- 5. Do not recreate or upgrade the Sub2API container.

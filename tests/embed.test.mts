@@ -33,9 +33,11 @@ test("auto-create only picks the 媒体台 group", () => {
     { id: 2, name: "plus", platform: "openai", status: "active", allow_image_generation: true },
     { id: 7, name: "ChatGPT 生图", platform: "openai", status: "active", allow_image_generation: true },
     { id: 8, name: "媒体台", platform: "openai", status: "active", allow_image_generation: true },
+    { id: 11, name: "媒体台", platform: "openai", status: "active", allow_image_generation: true },
   ];
   assert.equal(groupAllowsImage(groups[0]), false);
-  assert.equal(pickImageGroup(groups)?.id, 8);
+  assert.equal(pickImageGroup(groups)?.id, 11);
+  assert.equal(pickImageGroup(groups.filter((group) => group.id !== 11)), null);
   assert.equal(pickImageGroup(groups.slice(0, 3)), null);
   assert.equal(pickImageGroup([groups[0]]), null);
 });

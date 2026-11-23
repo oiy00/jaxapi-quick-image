@@ -185,11 +185,11 @@ export async function requestImage(input: {
 
 
 export function requestVideo(): Promise<never> {
-  return Promise.reject(new Error("视频上游协议未验证，已禁止向中转站提交。"));
+  return Promise.reject(new Error("浏览器不能把视频提交到中转站 /v1/videos。"));
 }
 
 export function fetchVideoStatus(): Promise<never> {
-  return Promise.reject(new Error("视频上游协议未验证，已禁止向中转站查询。"));
+  return Promise.reject(new Error("浏览器不能向中转站查询视频。"));
 }
 
 export async function fetchKeyBilling(apiKey: string): Promise<BillingInfo | null> {

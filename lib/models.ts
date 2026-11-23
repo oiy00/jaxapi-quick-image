@@ -109,7 +109,7 @@ export const PIXEL_SIZES: Record<ImageResolution, Record<AspectId, string>> = {
   },
 };
 
-export const DEFAULT_MODEL: ImageModelId = "gpt-image-2";
+export const DEFAULT_MODEL: ImageModelId = "gpt-image-2.5-flare";
 export const DEFAULT_RESOLUTION: ImageResolution = "1K";
 export const DEFAULT_ASPECT: AspectId = "1:1";
 export const DEFAULT_QUALITY = "auto";
