@@ -6,8 +6,11 @@ import {
   capChangeWarning,
   clipboardPasteKind,
   editRejection,
+  imageRequestUrl,
   inspectEditMultipart,
   intakeNotice,
+  lostResponseMessage,
+  multipartClosed,
   planReferenceIntake,
   prepareReferenceFile,
   REFERENCE_PART_NAME,
@@ -106,6 +109,30 @@ test("paste plus upload stays inside the cap, and other models still reject two"
   assert.equal(editRejection("gpt-image-2.5-flare-fb", 2) == null, false);
 });
 
+test("image posts use the app proxy, including when the page is under /image", () => {
+  assert.equal(imageRequestUrl("/v1/images/edits", ""), "/api/jax/v1/images/edits");
+  assert.equal(imageRequestUrl("/v1/images/edits", "/image"), "/image/api/jax/v1/images/edits");
+  assert.equal(imageRequestUrl("/v1/images/generations", "/image/"), "/image/api/jax/v1/images/generations");
+});
+
+test("a lost response reports milliseconds and does not pretend it was one second", () => {
+  const fast = lostResponseMessage(180);
+  assert.match(fast, /180 毫秒/);
+  assert.equal(fast.includes("1 秒"), false);
+  assert.match(fast, /不要立刻再提交/);
+});
+
+test("two realistic image parts are complete and a cut body is not forwarded", () => {
+  const closed = twoImages(2_000_000, 2_500_000);
+  assert.equal(multipartClosed(closed.body, closed.type), true);
+  const seen = inspectEditMultipart(closed.body, closed.type);
+  assert.equal(seen.model, "gpt-image-2.5-flare");
+  assert.equal(seen.imageCount, 2);
+  assert.equal(editRejection(seen.model, seen.imageCount), null);
+  const cut = closed.body.subarray(0, Math.floor(closed.body.length / 2));
+  assert.equal(multipartClosed(cut, closed.type), false);
+});
+
 test("a lower model cap warns and does not describe deletion", () => {
   const warning = capChangeWarning(5, 1);
   assert.match(warning ?? "", /没有删除/);
@@ -130,6 +157,46 @@ test("image[] counts as an input image and an unparsed body is not guessed", () 
   assert.equal(inspectEditMultipart(new Uint8Array([1, 2, 3]), "application/json").parsed, false);
   assert.equal(editRejection(null, 2), editRejection("", 2));
 });
+
+function twoImages(first: number, second: number): { body: Uint8Array; type: string } {
+  const boundary = "----RealBoundary7MA4YWxk";
+  const chunks = [
+    field(boundary, "model", "gpt-image-2.5-flare"),
+    field(boundary, "prompt", "按参考修改"),
+    field(boundary, "size", "1024x576"),
+    filePart(boundary, "image", "left.jpg", first, 0x11),
+    filePart(boundary, "image", "right.jpg", second, 0x22),
+    new TextEncoder().encode(`--${boundary}--\r\n`),
+  ];
+  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const body = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { body, type: `multipart/form-data; boundary=${boundary}` };
+}
+
+function field(boundary: string, name: string, value: string): Uint8Array {
+  return new TextEncoder().encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+  );
+}
+
+function filePart(boundary: string, name: string, filename: string, size: number, fill: number): Uint8Array {
+  const head = new TextEncoder().encode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: image/jpeg\r\n\r\n`,
+  );
+  const bytes = new Uint8Array(head.length + size + 2);
+  bytes.set(head, 0);
+  bytes[head.length] = 0xff;
+  bytes[head.length + 1] = 0xd8;
+  bytes.fill(fill, head.length + 2, head.length + size);
+  bytes[head.length + size] = 13;
+  bytes[head.length + size + 1] = 10;
+  return bytes;
+}
 
 function multipart(
   boundary: string,

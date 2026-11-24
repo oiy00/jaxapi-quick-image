@@ -1,4 +1,5 @@
 import { parseApiError, redactSecrets, unwrapEnvelope } from "./errors";
+import { imageRequestUrl, lostResponseMessage } from "./reference-images";
 import type { ParsedApiError } from "./errors";
 import { shouldUseDirectApi } from "./session";
 
@@ -26,6 +27,8 @@ type RequestOptions = {
   form?: FormData;
   timeoutMs?: number;
   secrets?: Array<string | null | undefined>;
+  /** Image generate/edit must hit this app's proxy, not the direct /v1 hop. */
+  forceProxy?: boolean;
 };
 
 
@@ -48,8 +51,11 @@ export async function jaxRequest<T>(path: string, options: RequestOptions = {}):
   const timeoutMs = options.timeoutMs ?? 25_000;
   const startedAt = Date.now();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const url = options.forceProxy
+    ? imageRequestUrl(path, process.env.NEXT_PUBLIC_BASE_PATH || "")
+    : apiUrl(path);
   try {
-    const response = await fetch(apiUrl(path), {
+    const response = await fetch(url, {
       method: options.method ?? (body ? "POST" : "GET"),
       headers,
       body,
@@ -66,15 +72,16 @@ export async function jaxRequest<T>(path: string, options: RequestOptions = {}):
     return unwrapEnvelope(parsed) as T;
   } catch (error) {
     if (error instanceof JaxClientError) throw error;
-    const elapsedSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-    const billedHint = "这次请求可能已经在上游完成并计费，请先到「使用记录」或余额核对，不要立刻重复提交。未展示的图片无法从这边自动找回。";
+    const elapsedMs = Date.now() - startedAt;
+    const elapsedSec = Math.max(0, Math.round(elapsedMs / 1000));
+    const billedHint = "请求可能已经到达中转站并仍在完成、扣费，请先核对使用记录和余额，不要立刻再提交。未展示的图片无法从这边自动找回。";
     if (error instanceof DOMException && error.name === "AbortError") {
-      const ourTimer = Date.now() - startedAt >= timeoutMs - 250;
+      const ourTimer = elapsedMs >= timeoutMs - 250;
       throw new JaxClientError({
         status: 504,
         message: ourTimer
           ? `已等待 ${elapsedSec} 秒，浏览器端停止等待。${billedHint}`
-          : `连接在约 ${elapsedSec} 秒时被中断（常见原因是前置代理在长时间无响应数据时断开）。${billedHint}`,
+          : `连接在 ${elapsedMs} 毫秒时被中断。${billedHint}`,
         reason: "UPSTREAM_TIMEOUT",
         invalidKey: false,
         timeout: true,
@@ -82,7 +89,7 @@ export async function jaxRequest<T>(path: string, options: RequestOptions = {}):
     }
     throw new JaxClientError({
       status: 0,
-      message: `网络在约 ${elapsedSec} 秒时中断，没有收到上游结果。${billedHint}`,
+      message: lostResponseMessage(elapsedMs),
       invalidKey: false,
       timeout: false,
     });

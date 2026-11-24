@@ -22,7 +22,7 @@ export type HistoryCard = {
 export type RunView =
   | { status: "idle" }
   | { status: "pending"; startedAt: number; mode: "generate" | "edit" }
-  | { status: "error"; message: string; timeout?: boolean }
+  | { status: "error"; message: string; timeout?: boolean; uncertain?: boolean }
   | {
       status: "success";
       images: { url: string; name: string }[];

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { editRejection, inspectEditMultipart } from "@/lib/reference-images";
+import { editRejection, inspectEditMultipart, MAX_EDIT_BODY_BYTES, multipartClosed } from "@/lib/reference-images";
 import { apiBaseUrl, isProxiedRequest, sanitizeQuery, timeoutFor } from "@/lib/proxy-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const MAX_BODY = 20 * 1024 * 1024;
+const MAX_BODY = MAX_EDIT_BODY_BYTES;
 
 async function handle(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path: parts } = await context.params;
@@ -46,7 +46,7 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
     if (request.method !== "GET" && request.method !== "HEAD") {
       buffered = await request.arrayBuffer();
       if (buffered.byteLength > MAX_BODY) {
-        return NextResponse.json({ code: 413, message: "上传超过 20MB" }, { status: 413 });
+        return NextResponse.json({ code: 413, message: "上传超过 64MB，没有发给上游。" }, { status: 413 });
       }
       init.body = buffered;
     }
@@ -56,7 +56,14 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       path === "/v1/images/edits" &&
       contentType?.toLowerCase().includes("multipart/form-data")
     ) {
-      const inspected = inspectEditMultipart(new Uint8Array(buffered), contentType);
+      const bytes = new Uint8Array(buffered);
+      if (!multipartClosed(bytes, contentType)) {
+        return NextResponse.json(
+          { code: 400, message: "上传在中途被截断，没有发给上游。请减小参考图后再试。" },
+          { status: 400 },
+        );
+      }
+      const inspected = inspectEditMultipart(bytes, contentType);
       if (inspected.parsed) {
         const rejected = editRejection(inspected.model, inspected.imageCount);
         if (rejected) {
