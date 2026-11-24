@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
-import { Download, Image as ImageIcon, ImagePlus, KeyRound, Loader2, LogOut, Search, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Image as ImageIcon, ImagePlus, KeyRound, Loader2, LogOut, Search, Trash2, X } from "lucide-react";
 import { formatUsd } from "@/lib/money";
 import { ASPECTS, FIXED_COUNT, MODELS, pixelSize, qualitiesFor, resolutionsFor } from "@/lib/models";
 import { mediaUnitPrice } from "@/lib/pricing";
@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { clipboardPasteKind } from "@/lib/reference-images";
 import { ImageViewer, collectViewerImages } from "./image-viewer";
 import { Segmented, SettingRow, Stage, StageCopy, StageSweep, formatPixels, ratioOf } from "./stage";
 import type { ConnectionView, Draft, EstimateView, HistoryCard, KeyOption, RunView } from "./view";
@@ -36,10 +37,13 @@ type StudioProps = {
   onCreate: () => void;
   draft: Draft;
   onDraft: (patch: Partial<Draft>) => void;
-  referenceName: string | null;
-  referenceUrl: string | null;
-  onPickReference: (file: File) => void;
-  onClearReference: () => void;
+  references: { id: string; name: string; url: string }[];
+  referenceCap: number;
+  referenceCapNote?: string;
+  onAddReferences: (files: File[]) => void;
+  onRemoveReference: (id: string) => void;
+  onMoveReference: (id: string, direction: -1 | 1) => void;
+  headerExtra?: ReactNode;
   estimate: EstimateView | null;
   run: RunView;
   onGenerate: () => void;
@@ -78,6 +82,7 @@ export function Studio(props: StudioProps) {
         {props.previewNote ? (
           <p className="hidden text-xs text-primary md:block">{props.previewNote}</p>
         ) : null}
+        {props.headerExtra}
         <div className="ml-auto flex items-center gap-1 md:gap-3">
           <p className="text-right text-sm whitespace-nowrap tabular-nums">
             <span className="mr-1.5 hidden text-xs text-muted-foreground sm:inline">余额</span>
@@ -167,10 +172,12 @@ function ImageDesk(props: StudioProps) {
         <PromptDock
           prompt={props.draft.prompt}
           onPrompt={(prompt) => props.onDraft({ prompt })}
-          referenceName={props.referenceName}
-          referenceUrl={props.referenceUrl}
-          onPickReference={props.onPickReference}
-          onClearReference={props.onClearReference}
+          references={props.references}
+          referenceCap={props.referenceCap}
+          referenceCapNote={props.referenceCapNote}
+          onAddReferences={props.onAddReferences}
+          onRemoveReference={props.onRemoveReference}
+          onMoveReference={props.onMoveReference}
           price={props.estimate ? formatUsd(props.estimate.totalUsd) : null}
           busy={busy}
           disabled={!canGenerate}
@@ -635,13 +642,28 @@ function HistoryCardButton({
   );
 }
 
+function imageFilesFromList(files: Iterable<File | null>): File[] {
+  const images: File[] = [];
+  const seen = new Set<string>();
+  for (const file of files) {
+    if (!file || !file.type.startsWith("image/")) continue;
+    const key = `${file.type}:${file.size}:${file.name}:${file.lastModified}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    images.push(file);
+  }
+  return images;
+}
+
 function PromptDock({
   prompt,
   onPrompt,
-  referenceName,
-  referenceUrl,
-  onPickReference,
-  onClearReference,
+  references,
+  referenceCap,
+  referenceCapNote,
+  onAddReferences,
+  onRemoveReference,
+  onMoveReference,
   price,
   busy,
   disabled,
@@ -649,16 +671,19 @@ function PromptDock({
 }: {
   prompt: string;
   onPrompt: (value: string) => void;
-  referenceName: string | null;
-  referenceUrl: string | null;
-  onPickReference: (file: File) => void;
-  onClearReference: () => void;
+  references: { id: string; name: string; url: string }[];
+  referenceCap: number;
+  referenceCapNote?: string;
+  onAddReferences: (files: File[]) => void;
+  onRemoveReference: (id: string) => void;
+  onMoveReference: (id: string, direction: -1 | 1) => void;
   price: string | null;
   busy: boolean;
   disabled: boolean;
   onGenerate: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const showPicker = references.length < referenceCap;
   return (
     <div className="border-t bg-background px-3 pt-1 pb-3 md:px-4">
       <div
@@ -671,8 +696,18 @@ function PromptDock({
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);
-          const file = event.dataTransfer.files?.[0];
-          if (file) onPickReference(file);
+          const images = imageFilesFromList(event.dataTransfer.files);
+          if (images.length) onAddReferences(images);
+        }}
+        onPaste={(event) => {
+          const text = event.clipboardData.getData("text/plain");
+          const images = imageFilesFromList([
+            ...[...event.clipboardData.items].map((item) => (item.kind === "file" ? item.getAsFile() : null)),
+            ...event.clipboardData.files,
+          ]);
+          if (clipboardPasteKind({ text, imageCount: images.length }) !== "images") return;
+          event.preventDefault();
+          onAddReferences(images);
         }}
       >
         <label htmlFor="image-prompt" className="sr-only">
@@ -693,41 +728,61 @@ function PromptDock({
           className="block field-sizing-content max-h-[32vh] min-h-20 w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-base leading-7 outline-none placeholder:text-muted-foreground md:text-[15px]"
         />
         <div className="flex flex-wrap items-center gap-2 px-2 pb-2">
-          {referenceUrl && referenceName ? (
-            <span className="flex max-w-56 items-center gap-2 rounded-md bg-accent py-1 pr-1 pl-1 text-xs">
-              <img src={referenceUrl} alt="" className="size-7 rounded object-cover" />
-              <span className="min-w-0 truncate" title={referenceName}>
-                {referenceName}
+          {references.map((item, index) => (
+            <span key={item.id} className="flex max-w-56 items-center gap-1 rounded-md bg-accent py-1 pr-1 pl-1 text-xs">
+              <img src={item.url} alt="" className="size-7 rounded object-cover" />
+              <span className="min-w-0 truncate" title={item.name}>
+                {item.name}
               </span>
-              <Button type="button" size="icon-xs" variant="ghost" onClick={onClearReference} aria-label="移除参考图">
+              {references.length > 1 ? (
+                <>
+                  <Button type="button" size="icon-xs" variant="ghost" aria-label={`前移 ${item.name}`} disabled={index === 0} onClick={() => onMoveReference(item.id, -1)}>
+                    <ChevronLeft />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label={`后移 ${item.name}`}
+                    disabled={index === references.length - 1}
+                    onClick={() => onMoveReference(item.id, 1)}
+                  >
+                    <ChevronRight />
+                  </Button>
+                </>
+              ) : null}
+              <Button type="button" size="icon-xs" variant="ghost" onClick={() => onRemoveReference(item.id)} aria-label={`移除参考图 ${item.name}`}>
                 <X />
               </Button>
             </span>
-          ) : (
+          ))}
+          {showPicker ? (
             <label
               className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground outline-none hover:bg-accent hover:text-foreground has-focus-visible:ring-2 has-focus-visible:ring-ring"
-              title="PNG、JPEG、WebP，12MB 以内。上传后可按当前比例裁剪。也可以直接拖进来。"
+              title="PNG、JPEG、WebP，12MB 以内。可上传、拖入，或在描述框按 Ctrl 或 ⌘ + V 粘贴图片。上传后可按当前比例裁剪。"
             >
               <ImagePlus className="size-4" />
               参考图
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
+                multiple={referenceCap > 1}
                 className="sr-only"
                 onChange={(event) => {
-                  const file = event.target.files?.[0];
+                  const files = [...(event.target.files ?? [])];
                   event.target.value = "";
-                  if (file) onPickReference(file);
+                  if (files.length) onAddReferences(files);
                 }}
               />
             </label>
-          )}
+          ) : null}
+          {referenceCapNote ? <span className="max-w-xs text-xs leading-5 text-muted-foreground">{referenceCapNote}</span> : null}
           <span className="text-xs text-muted-foreground tabular-nums">{prompt.length}/4000</span>
           <span className="hidden text-xs text-muted-foreground lg:inline">Ctrl 或 ⌘ + Enter 提交</span>
           <span className="ml-auto text-sm tabular-nums">{price}</span>
           <Button type="button" className="h-9 px-4" disabled={disabled} onClick={onGenerate}>
             {busy ? <Loader2 className="animate-spin" /> : null}
-            {referenceName ? "按参考图编辑" : "生成图片"}
+            {references.length > 0 ? "按参考图编辑" : "生成图片"}
           </Button>
         </div>
       </div>
