@@ -1,4 +1,5 @@
 import { jaxRequest } from "./jax-client";
+import { editRejection, REFERENCE_PART_NAME, referencePartNames } from "./reference-images";
 import { AUTO_IMAGE_KEY_NAME, attachGroups, pickImageGroup } from "./keys";
 export { AUTO_IMAGE_KEY_NAME };
 import { toPublicUser } from "./session";
@@ -153,7 +154,7 @@ export async function requestImage(input: {
   size: string;
   quality: string;
   count: number;
-  file?: File;
+  files?: File[];
 }): Promise<unknown> {
   const path = input.mode === "edit" ? "/v1/images/edits" : "/v1/images/generations";
   const common = {
@@ -161,14 +162,19 @@ export async function requestImage(input: {
     timeoutMs: 600_000,
     secrets: [input.apiKey],
   };
-  if (input.file) {
+  const files = input.files ?? [];
+  const rejected = editRejection(input.model, files.length);
+  if (rejected) throw new Error(rejected);
+  if (files.length > 0) {
     const form = new FormData();
     form.set("model", input.model);
     form.set("prompt", input.prompt);
     form.set("size", input.size);
     form.set("quality", input.quality);
     form.set("response_format", "b64_json");
-    form.set("image", input.file, input.file.name);
+    const partName = referencePartNames(files.length)[0] ?? REFERENCE_PART_NAME;
+    if (files.length === 1) form.set(partName, files[0], files[0].name);
+    else for (const file of files) form.append(partName, file, file.name);
     return jaxRequest(path, { ...common, form });
   }
   return jaxRequest(path, {

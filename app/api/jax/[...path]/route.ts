@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { editRejection, inspectEditMultipart } from "@/lib/reference-images";
 import { apiBaseUrl, isProxiedRequest, sanitizeQuery, timeoutFor } from "@/lib/proxy-policy";
 
 export const runtime = "nodejs";
@@ -41,12 +42,27 @@ async function handle(request: NextRequest, context: { params: Promise<{ path: s
       signal: controller.signal,
       redirect: "manual",
     };
+    let buffered: ArrayBuffer | undefined;
     if (request.method !== "GET" && request.method !== "HEAD") {
-      const buffered = await request.arrayBuffer();
+      buffered = await request.arrayBuffer();
       if (buffered.byteLength > MAX_BODY) {
         return NextResponse.json({ code: 413, message: "上传超过 20MB" }, { status: 413 });
       }
       init.body = buffered;
+    }
+    if (
+      buffered &&
+      request.method === "POST" &&
+      path === "/v1/images/edits" &&
+      contentType?.toLowerCase().includes("multipart/form-data")
+    ) {
+      const inspected = inspectEditMultipart(new Uint8Array(buffered), contentType);
+      if (inspected.parsed) {
+        const rejected = editRejection(inspected.model, inspected.imageCount);
+        if (rejected) {
+          return NextResponse.json({ code: 400, message: rejected }, { status: 400 });
+        }
+      }
     }
     const upstream = await fetch(target, init);
     const responseHeaders = new Headers();

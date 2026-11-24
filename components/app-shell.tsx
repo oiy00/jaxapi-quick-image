@@ -18,12 +18,14 @@ import { b64ToBlob, parseGenerationPayload } from "@/lib/images";
 import { isMediaKey, keyBlockReason, keyLabel, pickImageKey } from "@/lib/keys";
 import { DEFAULT_ASPECT, DEFAULT_MODEL, DEFAULT_QUALITY, DEFAULT_RESOLUTION, FIXED_COUNT, isImageModelId, pixelSize, resolutionsFor } from "@/lib/models";
 import { chargeFromBalance, estimateImageCost } from "@/lib/pricing";
+import { editRejection } from "@/lib/reference-images";
 import { clearSession, isEmbedded, readPreferredKeyId, readSession, stripSensitiveQueryInPlace, writePreferredKeyId, writeSession } from "@/lib/session";
 import { aspectValue } from "@/lib/models";
 import type { ApiKeyRecord, HistoryRecord, PublicSettings, PublicUser, StoredSession } from "@/lib/types";
 import { LoginScreen } from "@/components/auth/login-screen";
 import { CropDialog } from "@/components/studio/crop-dialog";
 import { Studio } from "@/components/studio/studio";
+import { useReferenceTray } from "@/components/studio/use-references";
 import { VideoDesk } from "@/components/studio/video-desk";
 import type { ConnectionView, Draft, HistoryCard, RunView } from "@/components/studio/view";
 
@@ -47,8 +49,7 @@ export function AppShell() {
   const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [reference, setReference] = useState<{ file: File; url: string } | null>(null);
-  const [cropFile, setCropFile] = useState<File | null>(null);
+  const references = useReferenceTray(draft.model);
   const [history, setHistory] = useState<LiveRecord[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [run, setRun] = useState<RunView>({ status: "idle" });
@@ -170,22 +171,6 @@ export function AppShell() {
     };
   }, [keys, selectedKey, user]);
 
-  function acceptReference(file: File) {
-    if (!file.type.startsWith("image/")) {
-      toast.error("请上传 PNG、JPEG 或 WebP 图片。");
-      return;
-    }
-    if (file.size > 12 * 1024 * 1024) {
-      toast.error("参考图超过 12MB。");
-      return;
-    }
-    setReference((current) => {
-      if (current) URL.revokeObjectURL(current.url);
-      return { file, url: URL.createObjectURL(file) };
-    });
-    setCropFile(null);
-  }
-
   async function persist(record: HistoryRecord) {
     try {
       await saveHistory(record);
@@ -241,8 +226,14 @@ export function AppShell() {
     if (!session || !user || !selectedKey || run.status === "pending") return;
     const prompt = draft.prompt.trim();
     if (!prompt) return;
+    const files = references.items.map((item) => item.file);
+    const rejected = editRejection(draft.model, files.length);
+    if (rejected) {
+      toast.error(rejected);
+      return;
+    }
     const size = pixelSize(draft.resolution, draft.aspect);
-    const mode = reference ? "edit" : "generate";
+    const mode = files.length > 0 ? "edit" : "generate";
     const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const pending: HistoryRecord = {
@@ -278,7 +269,7 @@ export function AppShell() {
         size,
         quality: draft.quality,
         count: FIXED_COUNT,
-        file: reference?.file,
+        files,
       });
 
     try {
@@ -421,24 +412,17 @@ export function AppShell() {
         }}
         onCreate={() => {
           setDraft(EMPTY_DRAFT);
-          setReference((current) => {
-            if (current) URL.revokeObjectURL(current.url);
-            return null;
-          });
+          references.clear();
           setSelectedHistoryId(null);
           setRun({ status: "idle" });
         }}
         draft={draft}
         onDraft={(patch) => setDraft((current) => ({ ...current, ...patch, count: FIXED_COUNT }))}
-        referenceName={reference?.file.name ?? null}
-        referenceUrl={reference?.url ?? null}
-        onPickReference={(file) => setCropFile(file)}
-        onClearReference={() =>
-          setReference((current) => {
-            if (current) URL.revokeObjectURL(current.url);
-            return null;
-          })
-        }
+        references={references.items.map((item) => ({ id: item.id, name: item.name, url: item.url }))}
+        referenceCap={references.cap}
+        onAddReferences={references.addFiles}
+        onRemoveReference={references.remove}
+        onMoveReference={references.move}
         estimate={estimate}
         run={run}
         onGenerate={() => void onGenerate()}
@@ -454,14 +438,14 @@ export function AppShell() {
         }
       />
       <CropDialog
-        open={cropFile !== null}
-        file={cropFile}
+        open={references.cropFile !== null}
+        file={references.cropFile}
         aspect={aspectValue(draft.aspect)}
         onOpenChange={(open) => {
-          if (!open) setCropFile(null);
+          if (!open) references.dismissCrop();
         }}
-        onUseOriginal={acceptReference}
-        onUseCrop={acceptReference}
+        onUseOriginal={references.accept}
+        onUseCrop={references.accept}
       />
     </>
   );
