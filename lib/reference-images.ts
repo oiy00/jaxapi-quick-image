@@ -73,6 +73,12 @@ export function multipartClosed(body: Uint8Array, contentType: string): boolean 
   return indexOfBytes(body, encode(`--${boundary}--`)) >= 0;
 }
 
+/** Both the button and Ctrl/Cmd+Enter must use this. Acknowledged means the user already saw 先核对记录. */
+export function submitAfterUncertainFailure(uncertain: boolean, acknowledged: boolean): "submit" | "acknowledge" {
+  if (uncertain && !acknowledged) return "acknowledge";
+  return "submit";
+}
+
 export function lostResponseMessage(elapsedMs: number): string {
   const ms = Math.max(0, Math.round(elapsedMs));
   return `网络在 ${ms} 毫秒时中断，没有收到响应。请求可能已经到达中转站并仍在完成、扣费，请先核对使用记录和余额，不要立刻再提交。未展示的图片无法从这边自动找回。`;

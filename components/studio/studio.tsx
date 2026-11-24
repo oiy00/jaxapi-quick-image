@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { capChangeWarning, clipboardPasteKind } from "@/lib/reference-images";
+import { capChangeWarning, clipboardPasteKind, submitAfterUncertainFailure } from "@/lib/reference-images";
 import { ImageViewer, collectViewerImages } from "./image-viewer";
 import { Segmented, SettingRow, Stage, StageCopy, StageSweep, formatPixels, ratioOf } from "./stage";
 import type { ConnectionView, Draft, EstimateView, HistoryCard, KeyOption, RunView } from "./view";
@@ -692,6 +692,13 @@ function PromptDock({
   const [dragging, setDragging] = useState(false);
   const [confirmResubmit, setConfirmResubmit] = useState(false);
   useEffect(() => setConfirmResubmit(false), [uncertain, prompt]);
+  function requestSubmit() {
+    if (submitAfterUncertainFailure(uncertain, confirmResubmit) === "acknowledge") {
+      setConfirmResubmit(true);
+      return;
+    }
+    onGenerate();
+  }
   const overCap = capChangeWarning(references.length, referenceCap);
   const showPicker = references.length < referenceCap;
   return (
@@ -728,7 +735,10 @@ function PromptDock({
           value={prompt}
           onChange={(event) => onPrompt(event.target.value.slice(0, 4000))}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") onGenerate();
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              requestSubmit();
+            }
           }}
           placeholder={
             dragging
@@ -795,13 +805,7 @@ function PromptDock({
             type="button"
             className="h-9 px-4"
             disabled={disabled}
-            onClick={() => {
-              if (uncertain && !confirmResubmit) {
-                setConfirmResubmit(true);
-                return;
-              }
-              onGenerate();
-            }}
+            onClick={requestSubmit}
           >
             {busy ? <Loader2 className="animate-spin" /> : null}
             {uncertain && !confirmResubmit ? "先核对记录" : uncertain ? "确认再提交一次" : references.length > 0 ? "按参考图编辑" : "生成图片"}
