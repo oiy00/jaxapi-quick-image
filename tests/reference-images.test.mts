@@ -3,20 +3,26 @@ import test from "node:test";
 import { MODELS } from "../lib/models.ts";
 import {
   ABSOLUTE_REFERENCE_CAP,
+  capChangeWarning,
   clipboardPasteKind,
   editRejection,
   inspectEditMultipart,
   intakeNotice,
   planReferenceIntake,
   prepareReferenceFile,
+  REFERENCE_PART_NAME,
+  referencePartNames,
   verifiedReferenceCap,
 } from "../lib/reference-images.ts";
 
-test("every shipped image model stays at one reference", () => {
+test("only gpt-image-2.5-flare is verified at five references", () => {
+  assert.equal(verifiedReferenceCap("gpt-image-2.5-flare"), 5);
   for (const model of MODELS) {
-    assert.equal(verifiedReferenceCap(model.id), 1, model.id);
+    const expected = model.id === "gpt-image-2.5-flare" ? 5 : 1;
+    assert.equal(verifiedReferenceCap(model.id), expected, model.id);
   }
   assert.equal(verifiedReferenceCap("gpt-image-2.5-flare-fb"), 1);
+  assert.equal(verifiedReferenceCap("gpt-image-2.5-sunburst"), 1);
   assert.equal(verifiedReferenceCap(""), 1);
   assert.equal(verifiedReferenceCap("not-a-model"), 1);
 });
@@ -52,18 +58,60 @@ test("reference files keep allowed types and reject the rest", () => {
   assert.equal(prepareReferenceFile({ type: "image/png", size: 0, name: "empty.png" }).ok, false);
 });
 
-test("two input images are refused before an upstream edit", () => {
-  const body = multipart("bound", [
+test("flare accepts five repeated image parts and rejects a sixth", () => {
+  const names = referencePartNames(5);
+  assert.deepEqual(names, ["image", "image", "image", "image", "image"]);
+  assert.equal(names.every((name) => name === REFERENCE_PART_NAME), true);
+  assert.equal(names.includes("image[]"), false);
+
+  const five = multipart(
+    "bound",
+    [{ name: "model", body: "gpt-image-2.5-flare" }, { name: "prompt", body: "按这些参考改" }].concat(
+      names.map((name, index) => ({ name, filename: `ref-${index + 1}.png`, type: "image/png", body: String(index) })),
+    ),
+  );
+  const seen = inspectEditMultipart(five, 'multipart/form-data; boundary="bound"');
+  assert.equal(seen.imageCount, 5);
+  assert.equal(editRejection(seen.model, seen.imageCount), null);
+
+  const six = multipart("bound", [
     { name: "model", body: "gpt-image-2.5-flare" },
-    { name: "prompt", body: "把天空改成黄昏" },
+    ...Array.from({ length: 6 }, (_, index) => ({
+      name: "image",
+      filename: `ref-${index + 1}.png`,
+      type: "image/png",
+      body: String(index),
+    })),
+  ]);
+  const tooMany = inspectEditMultipart(six, "multipart/form-data; boundary=bound");
+  assert.equal(tooMany.imageCount, 6);
+  assert.match(editRejection("gpt-image-2.5-flare", 6) ?? "", /没有发给上游/);
+});
+
+test("paste plus upload stays inside the cap, and other models still reject two", () => {
+  const flare = verifiedReferenceCap("gpt-image-2.5-flare");
+  assert.deepEqual(planReferenceIntake(1, 1, flare), { accept: 1, blocked: 0, replace: false });
+  assert.deepEqual(planReferenceIntake(4, 2, flare), { accept: 1, blocked: 1, replace: false });
+  assert.equal(intakeNotice(planReferenceIntake(5, 1, flare), flare), "最多 5 张参考图，不能再加。");
+
+  const other = multipart("bound", [
+    { name: "model", body: "gpt-image-2" },
     { name: "image", filename: "a.png", type: "image/png", body: "one" },
     { name: "image", filename: "b.png", type: "image/png", body: "two" },
   ]);
-  const seen = inspectEditMultipart(body, 'multipart/form-data; boundary="bound"');
-  assert.equal(seen.parsed, true);
-  assert.equal(seen.model, "gpt-image-2.5-flare");
+  const seen = inspectEditMultipart(other, "multipart/form-data; boundary=bound");
   assert.equal(seen.imageCount, 2);
-  assert.match(editRejection(seen.model, seen.imageCount) ?? "", /没有发给上游/);
+  assert.match(editRejection("gpt-image-2", 2) ?? "", /没有发给上游/);
+  assert.match(editRejection("gemini-3-pro-image", 2) ?? "", /没有发给上游/);
+  assert.equal(editRejection("gpt-image-2.5-flare-fb", 2) == null, false);
+});
+
+test("a lower model cap warns and does not describe deletion", () => {
+  const warning = capChangeWarning(5, 1);
+  assert.match(warning ?? "", /没有删除/);
+  assert.equal(warning?.includes("移除了"), false);
+  assert.equal(capChangeWarning(5, 5), null);
+  assert.equal(capChangeWarning(1, 1), null);
 });
 
 test("a single image edit is not rejected", () => {

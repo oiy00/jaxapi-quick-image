@@ -1,5 +1,5 @@
 import { jaxRequest } from "./jax-client";
-import { editRejection } from "./reference-images";
+import { editRejection, REFERENCE_PART_NAME, referencePartNames } from "./reference-images";
 import { AUTO_IMAGE_KEY_NAME, attachGroups, pickImageGroup } from "./keys";
 export { AUTO_IMAGE_KEY_NAME };
 import { toPublicUser } from "./session";
@@ -172,8 +172,9 @@ export async function requestImage(input: {
     form.set("size", input.size);
     form.set("quality", input.quality);
     form.set("response_format", "b64_json");
-    if (files.length === 1) form.set("image", files[0], files[0].name);
-    else for (const file of files) form.append("image", file, file.name);
+    const partName = referencePartNames(files.length)[0] ?? REFERENCE_PART_NAME;
+    if (files.length === 1) form.set(partName, files[0], files[0].name);
+    else for (const file of files) form.append(partName, file, file.name);
     return jaxRequest(path, { ...common, form });
   }
   return jaxRequest(path, {

@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { clipboardPasteKind } from "@/lib/reference-images";
+import { capChangeWarning, clipboardPasteKind } from "@/lib/reference-images";
 import { ImageViewer, collectViewerImages } from "./image-viewer";
 import { Segmented, SettingRow, Stage, StageCopy, StageSweep, formatPixels, ratioOf } from "./stage";
 import type { ConnectionView, Draft, EstimateView, HistoryCard, KeyOption, RunView } from "./view";
@@ -683,6 +683,7 @@ function PromptDock({
   onGenerate: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const overCap = capChangeWarning(references.length, referenceCap);
   const showPicker = references.length < referenceCap;
   return (
     <div className="border-t bg-background px-3 pt-1 pb-3 md:px-4">
@@ -776,6 +777,7 @@ function PromptDock({
               />
             </label>
           ) : null}
+          {overCap ? <span className="max-w-sm text-xs leading-5 text-destructive">{overCap}</span> : null}
           {referenceCapNote ? <span className="max-w-xs text-xs leading-5 text-muted-foreground">{referenceCapNote}</span> : null}
           <span className="text-xs text-muted-foreground tabular-nums">{prompt.length}/4000</span>
           <span className="hidden text-xs text-muted-foreground lg:inline">Ctrl 或 ⌘ + Enter 提交</span>

@@ -76,7 +76,7 @@ export default function PreviewPage() {
     count: 1,
   });
   const [run, setRun] = useState<RunView>(successRun(SEEDED[0]));
-  const [mockCap, setMockCap] = useState<1 | 5>(1);
+  const [mockCap, setMockCap] = useState<1 | 5 | undefined>(undefined);
   const references = useReferenceTray(draft.model, mockCap);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -103,10 +103,18 @@ export default function PreviewPage() {
   return (
     <>
     <Studio
-      previewNote="界面预览，未连接账户，也不会发起计费请求。参考图上限是模拟，不会请求上游。"
+      previewNote="界面预览，未连接账户，也不会发起计费请求。"
       headerExtra={
         <div className="hidden items-center gap-1 md:flex" role="group" aria-label="预览参考图上限">
-          <span className="text-xs text-muted-foreground">模拟上限</span>
+          <span className="text-xs text-muted-foreground">上限</span>
+          <button
+            type="button"
+            aria-pressed={mockCap == null}
+            onClick={() => setMockCap(undefined)}
+            className={`h-7 rounded-md px-2 text-xs ${mockCap == null ? "bg-primary text-primary-foreground" : "text-muted-foreground ring-1 ring-border"}`}
+          >
+            按模型
+          </button>
           {([1, 5] as const).map((value) => (
             <button
               key={value}
@@ -152,9 +160,9 @@ export default function PreviewPage() {
       references={references.items.map((item) => ({ id: item.id, name: item.name, url: item.url }))}
       referenceCap={references.cap}
       referenceCapNote={
-        mockCap > 1
-          ? "仅本页模拟最多 5 张。公开文档没有确认上游接受多张参考图，正式环境仍是 1 张。"
-          : "正式环境一次 1 张。多张参考图尚未验证，这里的 5 张只是模拟。"
+        mockCap == null
+          ? "gpt-image-2.5-flare 已核对最多 5 张，字段重复为 image。其他模型仍是 1 张。"
+          : "这个按钮只在预览里改上限，用来看超限提示，不改正式模型表。"
       }
       onAddReferences={references.addFiles}
       onRemoveReference={references.remove}

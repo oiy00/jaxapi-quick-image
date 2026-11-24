@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
+  capChangeWarning,
   intakeNotice,
   planReferenceIntake,
   prepareReferenceFile,
@@ -28,11 +29,8 @@ export function useReferenceTray(model: string, capOverride?: number) {
   useEffect(() => {
     if (capRef.current === cap) return;
     capRef.current = cap;
-    const current = itemsRef.current;
-    if (current.length <= cap) return;
-    current.slice(cap).forEach((item) => URL.revokeObjectURL(item.url));
-    toast.message(`已按当前模型保留 ${cap} 张参考图，移除了 ${current.length - cap} 张。`);
-    setItems(current.slice(0, cap));
+    const warning = capChangeWarning(itemsRef.current.length, cap);
+    if (warning) toast.message(warning);
   }, [cap]);
 
   useEffect(() => {
@@ -53,7 +51,13 @@ export function useReferenceTray(model: string, capOverride?: number) {
       prepared.push(new File([file], plan.name, { type: plan.type, lastModified: file.lastModified }));
     });
     errors.forEach((message) => toast.error(message));
-    const intake = planReferenceIntake(itemsRef.current.length, prepared.length, cap);
+    const held = itemsRef.current.length;
+    if (held > cap) {
+      const warning = capChangeWarning(held, cap);
+      if (warning) toast.message(warning);
+      return;
+    }
+    const intake = planReferenceIntake(held, prepared.length, cap);
     const notice = intakeNotice(intake, cap);
     if (notice) toast.message(notice);
     const accepted = prepared.slice(0, intake.accept);
@@ -62,6 +66,12 @@ export function useReferenceTray(model: string, capOverride?: number) {
   }
 
   function accept(file: File) {
+    if (cap <= 1 && itemsRef.current.length > 1) {
+      const warning = capChangeWarning(itemsRef.current.length, cap);
+      if (warning) toast.message(warning);
+      setQueue((current) => current.slice(1));
+      return;
+    }
     skipDismiss.current = true;
     queueMicrotask(() => {
       skipDismiss.current = false;

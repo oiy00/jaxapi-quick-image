@@ -1,23 +1,35 @@
 /**
  * Reference-image limits for POST /v1/images/edits.
  *
- * Verified 2026-11-24 from the public model plaza, not from a billed request:
- * https://console.supergpt.dev/api/v1/model-plaza
- * Group「AI 画布 · 全能生图」description:
- * 「支持参考图编辑，FB 模型仅文生图。」
- * https://console.supergpt.dev/help/clients says image parameters depend on the
- * model, group, and client. Neither page says an edits request may carry more
- * than one input image, or that an image array is forwarded.
+ * Public plaza (https://console.supergpt.dev/api/v1/model-plaza), group
+ * 「AI 画布 · 全能生图」: 「支持参考图编辑，FB 模型仅文生图。」
+ * https://console.supergpt.dev/help/clients says image parameters depend on
+ * the model, group, and client. That text does not set a count.
  *
- * OpenAI's own images.edit `image[]` shape is not evidence this relay forwards
- * it. Until a model is added below from an official contract or a captured
- * non-production result, every model stays at one reference.
+ * Paid check, exactly one, 2026-11-24 14:41 Asia/Shanghai. No further paid
+ * calls. POST https://api.supergpt.dev/v1/images/edits for gpt-image-2.5-flare
+ * only. Five multipart parts used the repeated field name "image", not
+ * "image[]". quality=low, size=1024x576, response_format=b64_json, n omitted.
+ * Service group 11, accounts 31–32, the production upstream route.
+ * HTTP 200, one output image, request id
+ * 1d137fbe-6cf2-4a41-b794-b60017341370. The five synthetic references were
+ * different numbered colors and shapes; the output showed all five, and the
+ * reference captions were not in the prompt, so all five were read. The
+ * response had no cost fields. The bitmap came back 1672×941 rather than the
+ * requested 1024×576; this module does not change size handling.
+ *
+ * Only that exact model id is capped at 5. Every other id, including
+ * gpt-image-2.5-flare-fb and unknown names, stays at 1.
  */
 export const ABSOLUTE_REFERENCE_CAP = 5;
 export const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
 export const REFERENCE_MIME = ["image/png", "image/jpeg", "image/webp"] as const;
+/** Repeated multipart name. Do not send image[]. */
+export const REFERENCE_PART_NAME = "image";
 
-const VERIFIED_REFERENCE_CAPS: Record<string, number> = {};
+const VERIFIED_REFERENCE_CAPS: Record<string, number> = {
+  "gpt-image-2.5-flare": 5,
+};
 
 export function verifiedReferenceCap(model: string): number {
   const listed = VERIFIED_REFERENCE_CAPS[model];
@@ -29,6 +41,22 @@ export function referenceCap(model: string, override?: number): number {
   if (override == null) return verifiedReferenceCap(model);
   if (!Number.isFinite(override)) return 1;
   return Math.min(ABSOLUTE_REFERENCE_CAP, Math.max(1, Math.floor(override)));
+}
+
+/** One part name per file. The verified flare request repeated "image". */
+export function referencePartNames(count: number): string[] {
+  const total = Math.max(0, Math.floor(count));
+  return Array.from({ length: total }, () => REFERENCE_PART_NAME);
+}
+
+/**
+ * Switching to a lower cap must not delete references. The caller warns and
+ * the edit is refused until the user removes the extras.
+ */
+export function capChangeWarning(count: number, cap: number): string | null {
+  const limit = Math.min(ABSOLUTE_REFERENCE_CAP, Math.max(1, Math.floor(cap)));
+  if (count <= limit) return null;
+  return `当前模型一次只能提交 ${limit} 张参考图，你还留着 ${count} 张。多出的没有删除；请先移除后再生成，否则不会发给上游。`;
 }
 
 export type ReferencePlan = {
