@@ -324,6 +324,7 @@ export function AppShell() {
       });
     } catch (error) {
       const timeout = error instanceof JaxClientError && error.timeout;
+      const uncertain = error instanceof JaxClientError && error.status === 0;
       let message = error instanceof Error ? error.message : "生成失败";
       const refreshed = await fetchMe(session.accessToken).catch(() => null);
       if (refreshed) {
@@ -343,7 +344,7 @@ export function AppShell() {
       };
       await persist(failed);
       replaceHistory([failed, ...history.filter((item) => item.id !== id).map(stripUrls)]);
-      setRun({ status: "error", message, timeout });
+      setRun({ status: "error", message, timeout, uncertain });
     }
   }
 

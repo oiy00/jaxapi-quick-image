@@ -181,6 +181,7 @@ function ImageDesk(props: StudioProps) {
           price={props.estimate ? formatUsd(props.estimate.totalUsd) : null}
           busy={busy}
           disabled={!canGenerate}
+          uncertain={props.run.status === "error" && Boolean(props.run.uncertain)}
           onGenerate={generate}
         />
       </main>
@@ -357,7 +358,11 @@ function ImageStage({
       <Stage ref={ref} ratio={ratioOf(nextSize)} tone="error">
         <StageCopy>
           <p className="text-foreground">{run.message}</p>
-          <p className="mt-2">{run.timeout ? "先核对使用记录和余额，再决定是否重新生成。" : "调整后可以重新生成。"}</p>
+          <p className="mt-2">
+            {run.timeout || run.uncertain
+              ? "先核对使用记录和余额，再决定是否重新生成。不要立刻再提交。"
+              : "调整后可以重新生成。"}
+          </p>
         </StageCopy>
       </Stage>
     );
@@ -667,6 +672,7 @@ function PromptDock({
   price,
   busy,
   disabled,
+  uncertain,
   onGenerate,
 }: {
   prompt: string;
@@ -680,9 +686,12 @@ function PromptDock({
   price: string | null;
   busy: boolean;
   disabled: boolean;
+  uncertain: boolean;
   onGenerate: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
+  const [confirmResubmit, setConfirmResubmit] = useState(false);
+  useEffect(() => setConfirmResubmit(false), [uncertain, prompt]);
   const overCap = capChangeWarning(references.length, referenceCap);
   const showPicker = references.length < referenceCap;
   return (
@@ -782,9 +791,20 @@ function PromptDock({
           <span className="text-xs text-muted-foreground tabular-nums">{prompt.length}/4000</span>
           <span className="hidden text-xs text-muted-foreground lg:inline">Ctrl 或 ⌘ + Enter 提交</span>
           <span className="ml-auto text-sm tabular-nums">{price}</span>
-          <Button type="button" className="h-9 px-4" disabled={disabled} onClick={onGenerate}>
+          <Button
+            type="button"
+            className="h-9 px-4"
+            disabled={disabled}
+            onClick={() => {
+              if (uncertain && !confirmResubmit) {
+                setConfirmResubmit(true);
+                return;
+              }
+              onGenerate();
+            }}
+          >
             {busy ? <Loader2 className="animate-spin" /> : null}
-            {references.length > 0 ? "按参考图编辑" : "生成图片"}
+            {uncertain && !confirmResubmit ? "先核对记录" : uncertain ? "确认再提交一次" : references.length > 0 ? "按参考图编辑" : "生成图片"}
           </Button>
         </div>
       </div>

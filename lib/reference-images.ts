@@ -23,6 +23,8 @@
  */
 export const ABSOLUTE_REFERENCE_CAP = 5;
 export const MAX_REFERENCE_BYTES = 12 * 1024 * 1024;
+/** Five max-size references plus multipart overhead. The live Caddy hop in front of this app must allow the same size. */
+export const MAX_EDIT_BODY_BYTES = 64 * 1024 * 1024;
 export const REFERENCE_MIME = ["image/png", "image/jpeg", "image/webp"] as const;
 /** Repeated multipart name. Do not send image[]. */
 export const REFERENCE_PART_NAME = "image";
@@ -53,6 +55,29 @@ export function referencePartNames(count: number): string[] {
  * Switching to a lower cap must not delete references. The caller warns and
  * the edit is refused until the user removes the extras.
  */
+export function editBodyOverflow(fileSizes: number[]): boolean {
+  const bytes = fileSizes.reduce((sum, size) => sum + Math.max(0, size), 0);
+  const overhead = 2048 * (fileSizes.length + 4);
+  return bytes + overhead > MAX_EDIT_BODY_BYTES;
+}
+
+/** Image calls always go through this app, even when other API calls are same-origin direct. */
+export function imageRequestUrl(path: string, basePath = ""): string {
+  const base = basePath.endsWith("/") ? basePath.slice(0, -1) : basePath;
+  return `${base}/api/jax${path}`;
+}
+
+export function multipartClosed(body: Uint8Array, contentType: string): boolean {
+  const boundary = boundaryOf(contentType);
+  if (!boundary) return false;
+  return indexOfBytes(body, encode(`--${boundary}--`)) >= 0;
+}
+
+export function lostResponseMessage(elapsedMs: number): string {
+  const ms = Math.max(0, Math.round(elapsedMs));
+  return `网络在 ${ms} 毫秒时中断，没有收到响应。请求可能已经到达中转站并仍在完成、扣费，请先核对使用记录和余额，不要立刻再提交。未展示的图片无法从这边自动找回。`;
+}
+
 export function capChangeWarning(count: number, cap: number): string | null {
   const limit = Math.min(ABSOLUTE_REFERENCE_CAP, Math.max(1, Math.floor(cap)));
   if (count <= limit) return null;

@@ -1,5 +1,5 @@
 import { jaxRequest } from "./jax-client";
-import { editRejection, REFERENCE_PART_NAME, referencePartNames } from "./reference-images";
+import { editBodyOverflow, editRejection, REFERENCE_PART_NAME, referencePartNames } from "./reference-images";
 import { AUTO_IMAGE_KEY_NAME, attachGroups, pickImageGroup } from "./keys";
 export { AUTO_IMAGE_KEY_NAME };
 import { toPublicUser } from "./session";
@@ -165,6 +165,9 @@ export async function requestImage(input: {
   const files = input.files ?? [];
   const rejected = editRejection(input.model, files.length);
   if (rejected) throw new Error(rejected);
+  if (editBodyOverflow(files.map((file) => file.size))) {
+    throw new Error("参考图合计超过 64MB，没有发出请求。请换小一些的图，或减少张数。");
+  }
   if (files.length > 0) {
     const form = new FormData();
     form.set("model", input.model);
@@ -175,10 +178,11 @@ export async function requestImage(input: {
     const partName = referencePartNames(files.length)[0] ?? REFERENCE_PART_NAME;
     if (files.length === 1) form.set(partName, files[0], files[0].name);
     else for (const file of files) form.append(partName, file, file.name);
-    return jaxRequest(path, { ...common, form });
+    return jaxRequest(path, { ...common, form, forceProxy: true });
   }
   return jaxRequest(path, {
     ...common,
+    forceProxy: true,
     json: {
       model: input.model,
       prompt: input.prompt,
