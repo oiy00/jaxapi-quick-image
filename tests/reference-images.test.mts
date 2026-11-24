@@ -10,6 +10,7 @@ import {
   inspectEditMultipart,
   intakeNotice,
   lostResponseMessage,
+  submitAfterUncertainFailure,
   multipartClosed,
   planReferenceIntake,
   prepareReferenceFile,
@@ -113,6 +114,13 @@ test("image posts use the app proxy, including when the page is under /image", (
   assert.equal(imageRequestUrl("/v1/images/edits", ""), "/api/jax/v1/images/edits");
   assert.equal(imageRequestUrl("/v1/images/edits", "/image"), "/image/api/jax/v1/images/edits");
   assert.equal(imageRequestUrl("/v1/images/generations", "/image/"), "/image/api/jax/v1/images/generations");
+});
+
+test("Ctrl or Cmd+Enter uses the same resubmit guard as the button", () => {
+  assert.equal(submitAfterUncertainFailure(false, false), "submit");
+  assert.equal(submitAfterUncertainFailure(false, true), "submit");
+  assert.equal(submitAfterUncertainFailure(true, false), "acknowledge");
+  assert.equal(submitAfterUncertainFailure(true, true), "submit");
 });
 
 test("a lost response reports milliseconds and does not pretend it was one second", () => {
