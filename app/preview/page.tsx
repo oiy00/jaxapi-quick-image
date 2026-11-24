@@ -1,29 +1,99 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Studio } from "@/components/studio/studio";
 import { VideoDesk } from "@/components/studio/video-desk";
-import type { Draft, RunView } from "@/components/studio/view";
-import { DEFAULT_ASPECT, DEFAULT_MODEL, DEFAULT_QUALITY, DEFAULT_RESOLUTION, FIXED_COUNT } from "@/lib/models";
+import type { Draft, HistoryCard, RunView } from "@/components/studio/view";
+import {
+  DEFAULT_ASPECT,
+  DEFAULT_MODEL,
+  DEFAULT_QUALITY,
+  DEFAULT_RESOLUTION,
+  FIXED_COUNT,
+  isImageModelId,
+  pixelSize,
+} from "@/lib/models";
 import { estimateImageCost } from "@/lib/pricing";
 
-const sample =
-  "data:image/svg+xml," +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800"><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b9c8e6"/><stop offset="1" stop-color="#e8edf6"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#s)"/><circle cx="560" cy="250" r="70" fill="#f7f9fc"/><path d="M0 560 L220 380 L380 500 L520 400 L800 600 L800 800 L0 800 Z" fill="#5d73a3"/><path d="M0 640 L260 520 L500 620 L800 540 L800 800 L0 800 Z" fill="#33456e"/></svg>`,
+function scene(width: number, height: number, sky: string, ground: string, accent: string) {
+  return (
+    "data:image/svg+xml," +
+    encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sky}"/><stop offset="1" stop-color="#e8edf6"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#s)"/><circle cx="${Math.round(width * 0.72)}" cy="${Math.round(height * 0.28)}" r="${Math.round(height * 0.08)}" fill="${accent}"/><path d="M0 ${Math.round(height * 0.62)} L${Math.round(width * 0.28)} ${Math.round(height * 0.42)} L${Math.round(width * 0.5)} ${Math.round(height * 0.58)} L${Math.round(width * 0.7)} ${Math.round(height * 0.4)} L${width} ${Math.round(height * 0.6)} L${width} ${height} L0 ${height} Z" fill="${ground}"/></svg>`,
+    )
   );
+}
+
+const night = scene(1024, 1024, "#243044", "#33456e", "#f4efe4");
+const coast = scene(1024, 576, "#7eb0d4", "#c4a574", "#fff7e8");
+
+const SEEDED: HistoryCard[] = [
+  {
+    id: "sample-night",
+    createdAt: new Date().toISOString(),
+    prompt: "雨后的弄堂，一扇半开的木门，暖光落在湿石板上。",
+    model: "gpt-image-2.5-flare",
+    size: "1024x1024",
+    status: "succeeded",
+    thumbUrl: night,
+  },
+  {
+    id: "sample-coast",
+    createdAt: new Date(Date.now() - 60_000).toISOString(),
+    prompt: "清晨的海岸公路，低云压着灰蓝色的海。",
+    model: "gpt-image-2",
+    size: "1024x576",
+    status: "succeeded",
+    thumbUrl: coast,
+  },
+];
+
+function successRun(card: HistoryCard): RunView {
+  return {
+    status: "success",
+    images: [{ url: card.thumbUrl ?? night, name: `${card.id}.svg` }],
+    costUsd: 0.09,
+    balanceAfter: 12.41,
+    usage: { total_tokens: 1200 },
+    estimateUsd: 0.09,
+    size: card.size,
+    model: card.model,
+  };
+}
 
 export default function PreviewPage() {
+  const [history, setHistory] = useState<HistoryCard[]>(SEEDED);
+  const [selected, setSelected] = useState<string | null>(SEEDED[0].id);
   const [draft, setDraft] = useState<Draft>({
-    prompt: "雨后的弄堂，一扇半开的木门，暖光落在湿石板上。",
+    prompt: SEEDED[0].prompt,
     model: DEFAULT_MODEL,
     resolution: DEFAULT_RESOLUTION,
     aspect: DEFAULT_ASPECT,
     quality: DEFAULT_QUALITY,
     count: 1,
   });
-  const [run, setRun] = useState<RunView>({ status: "idle" });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [run, setRun] = useState<RunView>(successRun(SEEDED[0]));
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const generation = useRef(0);
+
+  function showCard(card: HistoryCard) {
+    setSelected(card.id);
+    setDraft((current) => ({
+      ...current,
+      prompt: card.prompt,
+      model: isImageModelId(card.model) ? card.model : current.model,
+    }));
+    if (card.status === "succeeded" && card.thumbUrl) {
+      setRun(successRun(card));
+      return;
+    }
+    if (card.status === "pending") {
+      setRun({ status: "pending", startedAt: Date.parse(card.createdAt) || Date.now(), mode: "generate" });
+      return;
+    }
+    setRun({ status: "error", message: "这次生成没有完成。", timeout: card.status === "timeout" });
+  }
 
   return (
     <Studio
@@ -35,32 +105,20 @@ export default function PreviewPage() {
       selectedKeyId={1}
       onSelectKey={() => undefined}
       onLogout={() => undefined}
-      history={[
-        {
-          id: "sample",
-          createdAt: new Date().toISOString(),
-          prompt: "雨后的弄堂，一扇半开的木门。",
-          model: "gpt-image-2",
-          size: "1024x1024",
-          status: "succeeded",
-          thumbUrl: sample,
-        },
-      ]}
+      history={history}
       selectedHistoryId={selected}
-      onSelectHistory={() => {
-        setSelected("sample");
-        setRun({
-          status: "success",
-          images: [{ url: sample, name: "preview.svg" }],
-          costUsd: 0.09,
-          balanceAfter: 12.41,
-          usage: { total_tokens: 1200 },
-          estimateUsd: 0.09,
-          size: "1024x1024",
-          model: "gpt-image-2",
-        });
+      onSelectHistory={(id) => {
+        const card = history.find((item) => item.id === id);
+        if (card) showCard(card);
       }}
-      onDeleteHistory={() => setSelected(null)}
+      onDeleteHistory={(id) => {
+        setHistory((current) => current.filter((item) => item.id !== id));
+        if (selectedRef.current === id) {
+          selectedRef.current = null;
+          setSelected(null);
+          setRun({ status: "idle" });
+        }
+      }}
       onCreate={() => {
         setDraft((current) => ({ ...current, prompt: "" }));
         setSelected(null);
@@ -88,20 +146,29 @@ export default function PreviewPage() {
         />
       }
       onGenerate={() => {
-        if (!draft.prompt.trim()) return;
-        const startedAt = Date.now();
-        setRun({ status: "pending", startedAt, mode: "generate" });
+        const prompt = draft.prompt.trim();
+        if (!prompt) return;
+        const token = ++generation.current;
+        const id = crypto.randomUUID();
+        const size = pixelSize(draft.resolution, draft.aspect);
+        const model = draft.model;
+        const createdAt = new Date().toISOString();
+        const pending: HistoryCard = {
+          id,
+          createdAt,
+          prompt,
+          model,
+          size,
+          status: "pending",
+        };
+        setHistory((current) => [pending, ...current.filter((item) => item.id !== id)]);
+        setSelected(id);
+        selectedRef.current = id;
+        setRun({ status: "pending", startedAt: Date.now(), mode: "generate" });
         window.setTimeout(() => {
-          setRun({
-            status: "success",
-            images: [{ url: sample, name: "preview.svg" }],
-            costUsd: null,
-            balanceAfter: 12.5,
-            usage: null,
-            estimateUsd: estimateImageCost({ model: draft.model, resolution: draft.resolution, count: FIXED_COUNT })?.totalUsd ?? 0,
-            size: "1024x1024",
-            model: draft.model,
-          });
+          const done: HistoryCard = { ...pending, status: "succeeded", thumbUrl: night };
+          setHistory((current) => current.map((item) => (item.id === id ? done : item)));
+          if (generation.current === token && selectedRef.current === id) setRun(successRun(done));
         }, 900);
       }}
     />

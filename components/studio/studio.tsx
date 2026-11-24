@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
-import { Download, ImagePlus, KeyRound, Loader2, LogOut, Plus, Trash2, X } from "lucide-react";
+import { Download, Image as ImageIcon, ImagePlus, KeyRound, Loader2, LogOut, Search, Trash2, X } from "lucide-react";
 import { formatUsd } from "@/lib/money";
 import { ASPECTS, FIXED_COUNT, MODELS, pixelSize, qualitiesFor, resolutionsFor } from "@/lib/models";
 import { mediaUnitPrice } from "@/lib/pricing";
@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ImageViewer, collectViewerImages } from "./image-viewer";
 import { Segmented, SettingRow, Stage, StageCopy, StageSweep, formatPixels, ratioOf } from "./stage";
 import type { ConnectionView, Draft, EstimateView, HistoryCard, KeyOption, RunView } from "./view";
 
@@ -118,6 +119,16 @@ function ImageDesk(props: StudioProps) {
   const busy = props.run.status === "pending";
   const canGenerate = !blocked && props.connection.state !== "loading" && !busy && Boolean(props.draft.prompt.trim());
   const nextSize = pixelSize(props.draft.resolution, props.draft.aspect);
+  const gallery = useMemo(() => collectViewerImages(props.history, props.run), [props.history, props.run]);
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+
+  function openViewer() {
+    if (props.run.status !== "success" || gallery.length === 0) return;
+    const currentUrl = props.run.images[0]?.url;
+    const bySelected = gallery.findIndex((item) => item.id === props.selectedHistoryId);
+    const byUrl = currentUrl ? gallery.findIndex((item) => item.url === currentUrl) : -1;
+    setViewerIndex(bySelected >= 0 ? bySelected : Math.max(0, byUrl));
+  }
 
   useEffect(() => {
     const patch: Partial<Draft> = {};
@@ -142,7 +153,7 @@ function ImageDesk(props: StudioProps) {
   return (
     <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
       <main className="flex min-h-0 flex-col">
-        <ImageStage ref={stageRef} run={props.run} nextSize={nextSize} draft={props.draft} />
+        <ImageStage ref={stageRef} run={props.run} nextSize={nextSize} draft={props.draft} onView={openViewer} />
         <Filmstrip
           history={props.history}
           selectedId={props.selectedHistoryId}
@@ -251,6 +262,14 @@ function ImageDesk(props: StudioProps) {
         <ConnectionNote embedded={props.embedded} connection={props.connection} />
         <EstimateBlock estimate={props.estimate} frozen={props.frozenBalance} />
       </aside>
+      {viewerIndex != null && gallery.length > 0 ? (
+        <ImageViewer
+          images={gallery}
+          index={viewerIndex}
+          onIndex={setViewerIndex}
+          onClose={() => setViewerIndex(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -285,20 +304,36 @@ function ImageStage({
   run,
   nextSize,
   draft,
+  onView,
 }: {
   ref: Ref<HTMLDivElement>;
   run: RunView;
   nextSize: string;
   draft: Draft;
+  onView: () => void;
 }) {
   if (run.status === "success") {
     const image = run.images[0];
     return (
       <>
         <Stage ref={ref} ratio={ratioOf(run.size, ratioOf(nextSize))} tone="filled">
-          {image ? <img src={image.url} alt="生成结果" className="absolute inset-0 size-full object-contain" /> : null}
+          {image ? (
+            <button
+              type="button"
+              className="group absolute inset-0 cursor-zoom-in outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              aria-label="查看大图"
+              aria-haspopup="dialog"
+              onClick={onView}
+            >
+              <img src={image.url} alt="生成结果" className="size-full object-contain" />
+              <span className="pointer-events-none absolute right-3 bottom-3 inline-flex items-center gap-1 rounded-lg bg-black/70 px-2.5 py-1.5 text-xs text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                <Search className="size-3.5" />
+                查看大图
+              </span>
+            </button>
+          ) : null}
         </Stage>
-        <ResultBar run={run} />
+        <ResultBar run={run} onView={onView} />
       </>
     );
   }
@@ -347,7 +382,7 @@ function PendingCopy({ startedAt, editing }: { startedAt: number; editing: boole
   );
 }
 
-function ResultBar({ run }: { run: Extract<RunView, { status: "success" }> }) {
+function ResultBar({ run, onView }: { run: Extract<RunView, { status: "success" }>; onView: () => void }) {
   const image = run.images[0];
   return (
     <div className="border-t bg-card px-4 py-2.5 text-sm">
@@ -358,16 +393,16 @@ function ResultBar({ run }: { run: Extract<RunView, { status: "success" }> }) {
         <Figure label="扣费" value={run.costUsd == null ? "接口未返回" : formatUsd(run.costUsd)} />
         <Figure label="余额" value={formatUsd(run.balanceAfter)} />
         {image ? (
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto"
-            nativeButton={false}
-            render={<a href={image.url} download={image.name} />}
-          >
-            <Download />
-            下载
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="outline" aria-haspopup="dialog" onClick={onView}>
+              <Search />
+              查看大图
+            </Button>
+            <Button size="sm" variant="outline" nativeButton={false} render={<a href={image.url} download={image.name} />}>
+              <Download />
+              下载
+            </Button>
+          </div>
         ) : null}
       </div>
       {run.revisedPrompt ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">模型改写后的描述：{run.revisedPrompt}</p> : null}
@@ -403,6 +438,20 @@ function UsageDetails({ usage }: { usage: UsageNumbers | null }) {
   );
 }
 
+const COMPOSE_DRAFT_ID = "compose-draft";
+
+type StripItem = HistoryCard & { draft?: boolean };
+
+const COMPOSE_DRAFT: StripItem = {
+  id: COMPOSE_DRAFT_ID,
+  createdAt: "",
+  prompt: "",
+  model: "",
+  size: "",
+  status: "pending",
+  draft: true,
+};
+
 function Filmstrip({
   history,
   selectedId,
@@ -417,48 +466,93 @@ function Filmstrip({
   onCreate: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [draftOn, setDraftOn] = useState(false);
+  const [draftActive, setDraftActive] = useState(false);
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+  const openedOver = useRef<string | null>(null);
+  const fromStrip = useRef(false);
   useEffect(() => setConfirming(false), [selectedId]);
-  const selected = history.find((item) => item.id === selectedId);
+
+  const draftSuperseded =
+    draftOn &&
+    draftActive &&
+    selectedId != null &&
+    selectedId !== openedOver.current &&
+    history.some((item) => item.id === selectedId);
+  const showDraft = draftOn && !draftSuperseded;
+
+  useEffect(() => {
+    if (fromStrip.current) {
+      fromStrip.current = false;
+      return;
+    }
+    if (!draftSuperseded) return;
+    setDraftOn(false);
+    setDraftActive(false);
+    setAnchorId(null);
+    openedOver.current = null;
+  }, [draftSuperseded, selectedId]);
+
+  function create() {
+    if (!showDraft) openedOver.current = selectedId;
+    setAnchorId((current) => (showDraft ? current : selectedId));
+    setDraftOn(true);
+    setDraftActive(true);
+    onCreate();
+  }
+
+  function cancelDraft() {
+    const anchor = anchorId;
+    setDraftOn(false);
+    setDraftActive(false);
+    setAnchorId(null);
+    openedOver.current = null;
+    if (anchor && history.some((item) => item.id === anchor)) onSelect(anchor);
+  }
+
+  function selectItem(id: string) {
+    if (id === COMPOSE_DRAFT_ID) {
+      const already = showDraft && draftActive && selectedId == null;
+      setDraftActive(true);
+      if (!already) onCreate();
+      return;
+    }
+    if (id !== selectedId) fromStrip.current = true;
+    setDraftActive(false);
+    onSelect(id);
+  }
+
+  const visualId = showDraft && draftActive ? COMPOSE_DRAFT_ID : selectedId;
+  const items: StripItem[] = showDraft ? [COMPOSE_DRAFT, ...history] : history;
+  const selected = items.find((item) => item.id === visualId) ?? null;
 
   return (
-    <div className="flex items-center gap-3 border-t bg-background px-3 py-2.5 md:px-4">
+    <div className="flex items-center gap-3 border-t bg-background px-3 py-3 md:px-4">
       <button
         type="button"
-        onClick={onCreate}
-        aria-label="新建"
+        onClick={create}
         title="新建：清空描述和结果"
-        className="grid size-12 shrink-0 place-items-center rounded-md text-muted-foreground ring-1 ring-border outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex h-[92px] w-[4.75rem] shrink-0 items-center justify-center self-center rounded-xl border border-dashed border-[#c5cad3] bg-card text-sm whitespace-nowrap text-muted-foreground outline-none hover:border-foreground/30 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <Plus className="size-5" />
+        + 新建
       </button>
-      <ol className="flex min-w-0 flex-1 gap-2 overflow-x-auto py-0.5" aria-label="生成记录">
-        {history.length === 0 ? (
+      <ol className="flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto px-1 py-1" aria-label="生成记录">
+        {items.length === 0 ? (
           <li className="self-center text-xs text-muted-foreground">生成记录只保存在这台浏览器里，换设备不会同步。</li>
         ) : (
-          history.map((item) => (
+          items.map((item) => (
             <li key={item.id} className="shrink-0">
-              <button
-                type="button"
-                onClick={() => onSelect(item.id)}
-                aria-current={item.id === selectedId}
-                title={item.prompt || "未填写提示词"}
-                className={`relative block size-12 overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  item.id === selectedId ? "ring-2 ring-primary" : "ring-1 ring-border hover:ring-foreground/40"
-                }`}
-              >
-                {item.thumbUrl ? <img src={item.thumbUrl} alt="" className="size-full object-cover" /> : null}
-                {item.status === "succeeded" ? null : (
-                  <span className={`absolute inset-x-0 bottom-0 py-px text-center text-[10px] ${item.status === "pending" ? "bg-card/90" : "bg-destructive/85 text-white"}`}>
-                    {STATUS_LABEL[item.status]}
-                  </span>
-                )}
-                <span className="sr-only">{item.prompt || "未填写提示词"}</span>
-              </button>
+              <HistoryCardButton item={item} selected={item.id === visualId} onSelect={selectItem} />
             </li>
           ))
         )}
       </ol>
-      {selected ? (
+      {selected?.draft ? (
+        <Button size="sm" variant="ghost" className="shrink-0 text-muted-foreground" onClick={cancelDraft}>
+          <X />
+          取消新建
+        </Button>
+      ) : selected ? (
         confirming ? (
           <div className="flex shrink-0 gap-1">
             <Button size="sm" variant="destructive" onClick={() => onDelete(selected.id)}>
@@ -476,6 +570,68 @@ function Filmstrip({
         )
       ) : null}
     </div>
+  );
+}
+
+function HistoryCardButton({
+  item,
+  selected,
+  onSelect,
+}: {
+  item: StripItem;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const label = item.draft
+    ? `待生成，写好描述后生成${selected ? "，新的一次" : ""}`
+    : `${item.model}，${formatPixels(item.size)}${item.status === "succeeded" ? "" : `，${STATUS_LABEL[item.status]}`}${selected ? "，当前" : ""}`;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(item.id)}
+      aria-current={selected ? "true" : undefined}
+      aria-label={label}
+      title={item.draft ? "写好描述后生成" : item.prompt || "未填写提示词"}
+      className={`flex h-[108px] w-[260px] shrink-0 items-center gap-2.5 rounded-xl p-2 text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+        selected ? "bg-primary/10 ring-2 ring-primary" : "bg-card ring-1 ring-border hover:ring-foreground/25"
+      }`}
+    >
+      {item.draft ? (
+        <span
+          className={`grid size-[92px] shrink-0 place-items-center rounded-lg border border-dashed ${
+            selected ? "border-primary/45 bg-primary/10 text-primary" : "border-border bg-muted/70 text-muted-foreground"
+          }`}
+        >
+          <ImageIcon className="size-6" strokeWidth={1.5} />
+        </span>
+      ) : (
+        <span className="relative size-[92px] shrink-0 overflow-hidden rounded-lg bg-muted">
+          {item.thumbUrl ? <img src={item.thumbUrl} alt="" className="size-full object-cover" /> : null}
+          {item.status === "succeeded" ? null : (
+            <span
+              className={`absolute inset-x-0 bottom-0 py-0.5 text-center text-[11px] ${
+                item.status === "pending" ? "bg-card/90 text-foreground" : "bg-destructive/85 text-white"
+              }`}
+            >
+              {STATUS_LABEL[item.status]}
+            </span>
+          )}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className={`block truncate text-[13px] leading-5 font-medium ${item.draft && selected ? "text-primary" : "text-foreground"}`}>
+          {item.draft ? "待生成" : item.model}
+        </span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground tabular-nums">
+          {item.draft ? "写好描述后生成" : formatPixels(item.size)}
+        </span>
+        {selected ? (
+          <span className="mt-1.5 inline-flex h-5 items-center rounded-md bg-primary/15 px-1.5 text-[11px] font-medium text-primary">
+            {item.draft ? "新的一次" : "当前"}
+          </span>
+        ) : null}
+      </span>
+    </button>
   );
 }
 
