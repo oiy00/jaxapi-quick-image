@@ -16,6 +16,7 @@ import {
   pixelSize,
 } from "@/lib/models";
 import { estimateImageCost } from "@/lib/pricing";
+import { MAX_CONCURRENT_IMAGES } from "@/lib/image-concurrency";
 
 function scene(width: number, height: number, sky: string, ground: string, accent: string) {
   return (
@@ -29,6 +30,19 @@ function scene(width: number, height: number, sky: string, ground: string, accen
 const night = scene(1024, 1024, "#243044", "#33456e", "#f4efe4");
 const coast = scene(1024, 576, "#7eb0d4", "#c4a574", "#fff7e8");
 const sketch = scene(800, 600, "#d9e2ef", "#8a9bb8", "#ffffff");
+
+/** A mock result that carries its own prompt, so a mixed-up result is visible at a glance. */
+function labelled(prompt: string, size: string) {
+  const [w, h] = size.split("x").map(Number);
+  const hue = [...prompt].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 360;
+  const text = prompt.replace(/[<&>]/g, "").slice(0, 24);
+  return (
+    "data:image/svg+xml," +
+    encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="hsl(${hue} 45% 72%)"/><text x="50%" y="50%" text-anchor="middle" font-size="${Math.round(h / 14)}" fill="#16181d" font-family="sans-serif">${text}</text></svg>`,
+    )
+  );
+}
 
 /** Preview-only details a real record keeps in IndexedDB. */
 type PreviewDetail = Omit<ViewingRecord, "id" | "inFlight">;
@@ -99,7 +113,7 @@ export default function PreviewPage() {
   const [history, setHistory] = useState<HistoryCard[]>(SEEDED);
   const [details, setDetails] = useState<Record<string, PreviewDetail>>(SEEDED_DETAIL);
   const [selected, setSelected] = useState<string | null>(null);
-  const [inFlightId, setInFlightId] = useState<string | null>(null);
+  const [inFlightIds, setInFlightIds] = useState<string[]>([]);
   const [draft, setDraft] = useState<Draft>({
     prompt: "",
     model: DEFAULT_MODEL,
@@ -114,7 +128,7 @@ export default function PreviewPage() {
   const card = selected ? history.find((item) => item.id === selected) ?? null : null;
   const detail = card ? details[card.id] : undefined;
   const viewing: ViewingRecord | null =
-    card && detail ? { ...detail, id: card.id, inFlight: card.id === inFlightId } : null;
+    card && detail ? { ...detail, id: card.id, inFlight: inFlightIds.includes(card.id) } : null;
   const run: RunView = !card
     ? { status: "idle" }
     : card.status === "succeeded" && card.thumbUrl
@@ -164,7 +178,7 @@ export default function PreviewPage() {
         if (history.some((item) => item.id === id)) setSelected(id);
       }}
       onDeleteHistory={(id) => {
-        if (id === inFlightId) return;
+        if (inFlightIds.includes(id)) return;
         setHistory((current) => current.filter((item) => item.id !== id));
         if (selected === id) setSelected(null);
       }}
@@ -186,7 +200,8 @@ export default function PreviewPage() {
         ).then((files) => references.load(files, source.model));
         setSelected(null);
       }}
-      inFlight={inFlightId != null}
+      inFlightIds={inFlightIds}
+      maxInFlight={MAX_CONCURRENT_IMAGES}
       resubmitGuard={false}
       draft={draft}
       onDraft={(patch) => setDraft((current) => ({ ...current, ...patch }))}
@@ -217,7 +232,7 @@ export default function PreviewPage() {
       }
       onGenerate={() => {
         const prompt = draft.prompt.trim();
-        if (!prompt || inFlightId || selected) return;
+        if (!prompt || selected || inFlightIds.length >= MAX_CONCURRENT_IMAGES) return;
         const id = crypto.randomUUID();
         const size = pixelSize(draft.resolution, draft.aspect);
         const refs: ReferenceView[] = references.items.map((item, index) => ({
@@ -251,11 +266,15 @@ export default function PreviewPage() {
         }));
         setHistory((current) => [pending, ...current]);
         setSelected(id);
-        setInFlightId(id);
+        setInFlightIds((current) => [...current, id]);
+        // Later submissions finish sooner, so results arrive out of order on purpose.
+        const delay = Math.max(800, 4000 - inFlightIds.length * 700);
         window.setTimeout(() => {
-          setHistory((current) => current.map((item) => (item.id === id ? { ...pending, status: "succeeded", thumbUrl: night } : item)));
-          setInFlightId(null);
-        }, 2500);
+          setHistory((current) =>
+            current.map((item) => (item.id === id ? { ...pending, status: "succeeded", thumbUrl: labelled(prompt, size) } : item)),
+          );
+          setInFlightIds((current) => current.filter((item) => item !== id));
+        }, delay);
       }}
     />
     <CropDialog

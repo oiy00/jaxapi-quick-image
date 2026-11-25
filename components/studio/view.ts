@@ -50,6 +50,7 @@ export type RunView =
       images: { url: string; name: string }[];
       revisedPrompt?: string;
       costUsd: number | null;
+      costNote?: string;
       balanceAfter: number | null;
       usage: UsageNumbers | null;
       estimateUsd: number | null;

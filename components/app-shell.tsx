@@ -20,6 +20,7 @@ import { DEFAULT_ASPECT, DEFAULT_MODEL, DEFAULT_QUALITY, DEFAULT_RESOLUTION, FIX
 import { chargeFromBalance, estimateImageCost } from "@/lib/pricing";
 import { editRejection } from "@/lib/reference-images";
 import { persistAttempts, snapshotReference } from "@/lib/reference-snapshot";
+import { BalanceSequencer, ImageRequestTracker, MAX_CONCURRENT_IMAGES, OVERLAP_COST_NOTE } from "@/lib/image-concurrency";
 import { clearSession, isEmbedded, readPreferredKeyId, readSession, stripSensitiveQueryInPlace, writePreferredKeyId, writeSession } from "@/lib/session";
 import { aspectValue } from "@/lib/models";
 import type { ApiKeyRecord, HistoryRecord, HistoryReference, PublicSettings, PublicUser, StoredSession } from "@/lib/types";
@@ -54,8 +55,12 @@ export function AppShell() {
   const [history, setHistory] = useState<LiveRecord[]>([]);
   /** The history record being viewed read-only. null means the draft is shown. */
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  /** Id of the paid request still waiting on the upstream. Only one may run at a time. */
-  const [inFlightId, setInFlightId] = useState<string | null>(null);
+  /** Paid requests still waiting on the upstream, at most MAX_CONCURRENT_IMAGES. Each owns its own history record. */
+  const trackerRef = useRef(new ImageRequestTracker(MAX_CONCURRENT_IMAGES));
+  const balanceSeqRef = useRef(new BalanceSequencer());
+  const [inFlightIds, setInFlightIds] = useState<string[]>([]);
+  const balanceRef = useRef<number | null>(null);
+  balanceRef.current = user?.balance ?? null;
   const [resubmitGuard, setResubmitGuard] = useState(false);
   const urlsRef = useRef<string[]>([]);
   const historyRef = useRef<LiveRecord[]>([]);
@@ -221,7 +226,7 @@ export function AppShell() {
         references: viewed.refs,
         referenceCount: viewed.referenceCount ?? viewed.refs.length,
         referencesDropped: Boolean(viewed.referencesDropped),
-        inFlight: viewed.id === inFlightId,
+        inFlight: inFlightIds.includes(viewed.id),
       }
     : null;
 
@@ -248,7 +253,7 @@ export function AppShell() {
   }
 
   async function onGenerate() {
-    if (!session || !user || !selectedKey || inFlightId || selectedHistoryId) return;
+    if (!session || !user || !selectedKey || selectedHistoryId || !trackerRef.current.canStart()) return;
     const prompt = draft.prompt.trim();
     if (!prompt) return;
     const files = references.items.map((item) => item.file);
@@ -260,8 +265,12 @@ export function AppShell() {
     const size = pixelSize(draft.resolution, draft.aspect);
     const mode = files.length > 0 ? "edit" : "generate";
     const id = crypto.randomUUID();
-    setInFlightId(id);
+    if (!trackerRef.current.start(id)) return;
+    setInFlightIds(trackerRef.current.ids());
     setResubmitGuard(false);
+    // Read once at submit; later requests change the live balance.
+    const balanceBefore = balanceRef.current;
+    const activeSession = session;
     let kept: HistoryReference[] = [];
     try {
       kept = (await Promise.all(files.map((file) => snapshotReference(file).catch(() => null)))).filter(
@@ -300,8 +309,9 @@ export function AppShell() {
       upsertHistory(base);
       setSelectedHistoryId(id);
     } catch {
-      // Nothing was sent upstream yet, so releasing the lock is safe.
-      setInFlightId(null);
+      // Nothing was sent upstream yet, so releasing the slot is safe.
+      trackerRef.current.finish(id);
+      setInFlightIds(trackerRef.current.ids());
       toast.error("没能在这台浏览器建立记录，请求没有发出。");
       return;
     }
@@ -336,17 +346,15 @@ export function AppShell() {
       const parsed = parseGenerationPayload(payload);
       const images = await Promise.all(parsed.images.map((image) => toHistoryImage(image)));
       if (images.length === 0) throw new Error("上游没有返回图片");
-      const refreshed = await fetchMe(session.accessToken).catch(() => null);
-      if (refreshed) {
-        setUser(refreshed);
-        writeSession({ ...session, user: refreshed });
-      }
+      const refreshed = await readBalance(activeSession);
+      const { overlapped } = trackerRef.current.finish(id);
       const done: HistoryRecord = {
         ...base,
         status: "succeeded",
         images,
         usage: parsed.usage,
-        costUsd: chargeFromBalance(user.balance, refreshed?.balance ?? null),
+        costUsd: overlapped ? null : chargeFromBalance(balanceBefore, refreshed?.balance ?? null),
+        costNote: overlapped ? OVERLAP_COST_NOTE : undefined,
         balanceAfter: refreshed?.balance ?? null,
         revisedPrompt: parsed.images.find((image) => image.revised)?.revised,
       };
@@ -358,20 +366,20 @@ export function AppShell() {
       const timeout = error instanceof JaxClientError && error.timeout;
       const uncertain = error instanceof JaxClientError && error.status === 0;
       let message = error instanceof Error ? error.message : "生成失败";
-      const refreshed = await fetchMe(session.accessToken).catch(() => null);
-      if (refreshed) {
-        const charged = chargeFromBalance(user.balance, refreshed.balance);
-        setUser(refreshed);
-        writeSession({ ...session, user: refreshed });
-        if (charged && charged > 0 && !message.includes("使用记录")) {
-          message += ` 账户余额已减少约 ${charged.toFixed(4)} USD，请到「使用记录」核对，不要立刻重复提交。`;
-        }
+      const refreshed = await readBalance(activeSession);
+      const { overlapped } = trackerRef.current.finish(id);
+      const charged = refreshed ? chargeFromBalance(balanceBefore, refreshed.balance) : null;
+      if (charged && charged > 0 && !message.includes("使用记录")) {
+        message += overlapped
+          ? " 这段时间还有其他请求，无法判断这一张是否扣费，请到「使用记录」核对，不要立刻重复提交。"
+          : ` 账户余额已减少约 ${charged.toFixed(4)} USD，请到「使用记录」核对，不要立刻重复提交。`;
       }
       const failed: HistoryRecord = {
         ...base,
         status: timeout ? "timeout" : "failed",
         error: message,
-        costUsd: refreshed ? chargeFromBalance(user.balance, refreshed.balance) : pending.costUsd,
+        costUsd: overlapped ? null : refreshed ? charged : pending.costUsd,
+        costNote: overlapped ? OVERLAP_COST_NOTE : undefined,
         balanceAfter: refreshed?.balance ?? null,
         uncertain: Boolean(uncertain || timeout),
       };
@@ -380,8 +388,21 @@ export function AppShell() {
       if (uncertain || timeout) setResubmitGuard(true);
       toast.error("这次生成没有完成，详情见记录。");
     } finally {
-      setInFlightId(null);
+      // finish() is idempotent; this also covers a throw before either branch reached it.
+      trackerRef.current.finish(id);
+      setInFlightIds(trackerRef.current.ids());
     }
+  }
+
+  /** Reads the balance and applies it only if no newer read has landed first. */
+  async function readBalance(activeSession: StoredSession): Promise<PublicUser | null> {
+    const ticket = balanceSeqRef.current.ticket();
+    const refreshed = await fetchMe(activeSession.accessToken).catch(() => null);
+    if (refreshed && balanceSeqRef.current.accept(ticket)) {
+      setUser(refreshed);
+      writeSession({ ...activeSession, user: refreshed });
+    }
+    return refreshed;
   }
 
   if (booting) {
@@ -439,7 +460,7 @@ export function AppShell() {
           if (history.some((item) => item.id === id)) setSelectedHistoryId(id);
         }}
         onDeleteHistory={(id) => {
-          if (id === inFlightId) return;
+          if (inFlightIds.includes(id)) return;
           void deleteHistory(id);
           replaceHistory(historyRef.current.filter((item) => item.id !== id).map(stripUrls));
           if (selectedHistoryId === id) setSelectedHistoryId(null);
@@ -451,7 +472,8 @@ export function AppShell() {
         }}
         viewing={viewing}
         onReuse={reuseRecord}
-        inFlight={inFlightId != null}
+        inFlightIds={inFlightIds}
+        maxInFlight={MAX_CONCURRENT_IMAGES}
         resubmitGuard={resubmitGuard}
         draft={draft}
         onDraft={(patch) => setDraft((current) => ({ ...current, ...patch, count: FIXED_COUNT }))}
@@ -470,7 +492,12 @@ export function AppShell() {
             accountBalance={user.balance}
             enabled={Boolean(selectedKey && isMediaKey(selectedKey))}
             blockedReason={connection.state === "blocked" ? connection.summary : undefined}
-            onBalance={(balance) => setUser((current) => (current ? { ...current, balance } : current))}
+            onBalance={(balance) => {
+              // A video charge moves the balance under any running image request.
+              trackerRef.current.markBalanceMoved();
+              balanceSeqRef.current.accept(balanceSeqRef.current.ticket());
+              setUser((current) => (current ? { ...current, balance } : current));
+            }}
           />
         }
       />
@@ -527,6 +554,7 @@ function recordToRun(record: LiveRecord): RunView {
       ],
       revisedPrompt: record.revisedPrompt,
       costUsd: record.costUsd,
+      costNote: record.costNote,
       balanceAfter: record.balanceAfter,
       usage: record.usage,
       estimateUsd: record.estimateUsd,

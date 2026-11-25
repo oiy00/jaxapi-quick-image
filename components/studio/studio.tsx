@@ -42,8 +42,10 @@ type StudioProps = {
   viewing: ViewingRecord | null;
   /** Copy a past run's prompt, settings and references into the draft. */
   onReuse: (id: string) => void;
-  /** A paid request is still waiting on the upstream; a second one must not start. */
-  inFlight: boolean;
+  /** Paid requests still waiting on the upstream. Each has its own history card. */
+  inFlightIds: string[];
+  /** Page-wide limit on simultaneous requests. */
+  maxInFlight: number;
   /** The last request ended without a clear answer, so the next submit needs an extra click. */
   resubmitGuard: boolean;
   draft: Draft;
@@ -137,9 +139,10 @@ function ImageDesk(props: StudioProps) {
   const shownQualities = qualitiesFor(shown.model);
   const shownResolutions = resolutionsFor(shown.model);
   const blocked = props.connection.state === "blocked";
-  const busy = props.inFlight;
+  const running = props.inFlightIds.length;
+  const atCap = running >= props.maxInFlight;
   const canGenerate =
-    !readOnly && !blocked && props.connection.state !== "loading" && !props.inFlight && Boolean(props.draft.prompt.trim());
+    !readOnly && !blocked && props.connection.state !== "loading" && !atCap && Boolean(props.draft.prompt.trim());
   const nextSize = pixelSize(shown.resolution, shown.aspect);
   const gallery = useMemo(() => collectViewerImages(props.history, props.run), [props.history, props.run]);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -196,13 +199,13 @@ function ImageDesk(props: StudioProps) {
           run={props.run}
           nextSize={nextSize}
           draft={shown}
-          waiting={!readOnly && props.inFlight}
+          waiting={!readOnly && atCap ? props.maxInFlight : 0}
           onView={openViewer}
         />
         <Filmstrip
           history={props.history}
           viewingId={viewing?.id ?? null}
-          inFlightId={props.inFlight ? props.history.find((item) => item.status === "pending")?.id ?? null : null}
+          inFlightIds={props.inFlightIds}
           draftPrompt={props.draft.prompt}
           draftThumb={props.references[0]?.url}
           draftReferenceCount={props.references.length}
@@ -235,7 +238,8 @@ function ImageDesk(props: StudioProps) {
             onMoveReference={props.onMoveReference}
             onViewReference={(index) => openReferences(props.references, index)}
             price={props.estimate ? formatUsd(props.estimate.totalUsd) : null}
-            busy={busy}
+            running={running}
+            atCap={atCap}
             disabled={!canGenerate}
             uncertain={props.resubmitGuard}
             onGenerate={generate}
@@ -410,7 +414,8 @@ function ImageStage({
   run: RunView;
   nextSize: string;
   draft: Pick<Draft, "resolution" | "aspect">;
-  waiting: boolean;
+  /** Non-zero when the page is at its request limit; the value is that limit. */
+  waiting: number;
   onView: () => void;
 }) {
   if (run.status === "success") {
@@ -464,7 +469,7 @@ function ImageStage({
     <Stage ref={ref} ratio={ratioOf(nextSize)}>
       <StageCopy big={formatPixels(nextSize)}>
         {waiting
-          ? "上一张还在生成，完成后才能提交下一张。草稿会一直保留。"
+          ? `已有 ${waiting} 张在生成，完成一张后才能再提交。草稿会一直保留。`
           : `${draft.resolution}，${draft.aspect}。在下方写好描述后生成，结果会出现在这个框里。`}
       </StageCopy>
     </Stage>
@@ -497,7 +502,7 @@ function ResultBar({ run, onView }: { run: Extract<RunView, { status: "success" 
         <span className="font-medium">{run.model}</span>
         <span className="text-muted-foreground tabular-nums">{formatPixels(run.size)}</span>
         <Figure label="预估" value={formatUsd(run.estimateUsd)} />
-        <Figure label="扣费" value={run.costUsd == null ? "接口未返回" : formatUsd(run.costUsd)} />
+        <Figure label="扣费" value={run.costUsd == null ? (run.costNote ? "无法单独核算" : "接口未返回") : formatUsd(run.costUsd)} />
         <Figure label="余额" value={formatUsd(run.balanceAfter)} />
         {image ? (
           <div className="ml-auto flex items-center gap-2">
@@ -512,6 +517,7 @@ function ResultBar({ run, onView }: { run: Extract<RunView, { status: "success" 
           </div>
         ) : null}
       </div>
+      {run.costNote ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{run.costNote}。</p> : null}
       {run.revisedPrompt ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">模型改写后的描述：{run.revisedPrompt}</p> : null}
       <UsageDetails usage={run.usage} />
     </div>
@@ -550,7 +556,7 @@ const COMPOSE_DRAFT_ID = "compose-draft";
 function Filmstrip({
   history,
   viewingId,
-  inFlightId,
+  inFlightIds,
   draftPrompt,
   draftThumb,
   draftReferenceCount,
@@ -562,7 +568,7 @@ function Filmstrip({
 }: {
   history: HistoryCard[];
   viewingId: string | null;
-  inFlightId: string | null;
+  inFlightIds: string[];
   draftPrompt: string;
   draftThumb?: string;
   draftReferenceCount: number;
@@ -632,7 +638,7 @@ function Filmstrip({
             </Button>
           )
         ) : null
-      ) : selected && selected.id !== inFlightId ? (
+      ) : selected && !inFlightIds.includes(selected.id) ? (
         confirming === "delete" ? (
           <div className="flex shrink-0 gap-1">
             <Button size="sm" variant="destructive" onClick={() => onDelete(selected.id)}>
@@ -879,7 +885,8 @@ function PromptDock({
   onMoveReference,
   onViewReference,
   price,
-  busy,
+  running,
+  atCap,
   disabled,
   uncertain,
   onGenerate,
@@ -894,7 +901,8 @@ function PromptDock({
   onMoveReference: (id: string, direction: -1 | 1) => void;
   onViewReference: (index: number) => void;
   price: string | null;
-  busy: boolean;
+  running: number;
+  atCap: boolean;
   disabled: boolean;
   uncertain: boolean;
   onGenerate: () => void;
@@ -1006,16 +1014,21 @@ function PromptDock({
           {referenceCapNote ? <span className="max-w-xs text-xs leading-5 text-muted-foreground">{referenceCapNote}</span> : null}
           <span className="text-xs text-muted-foreground tabular-nums">{prompt.length}/4000</span>
           <span className="hidden text-xs text-muted-foreground lg:inline">Ctrl 或 ⌘ + Enter 提交</span>
-          <span className="ml-auto text-sm tabular-nums">{price}</span>
+          {running > 0 ? (
+            <span className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground" role="status">
+              <Loader2 className="size-3.5 animate-spin" />
+              {running} 张生成中
+            </span>
+          ) : null}
+          <span className={`${running > 0 ? "" : "ml-auto "}text-sm tabular-nums`}>{price}</span>
           <Button
             type="button"
             className="h-9 px-4"
             disabled={disabled}
             onClick={requestSubmit}
           >
-            {busy ? <Loader2 className="animate-spin" /> : null}
-            {busy
-              ? "上一张生成中"
+            {atCap
+              ? "已达同时上限"
               : uncertain && !confirmResubmit
                 ? "先核对记录"
                 : uncertain

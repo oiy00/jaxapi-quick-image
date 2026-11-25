@@ -126,6 +126,8 @@ export type HistoryRecord = {
   /** True when the browser could not keep the reference copies (quota or decode failure). */
   referencesDropped?: boolean;
   revisedPrompt?: string;
+  /** Why costUsd is unknown, e.g. the request overlapped others so the balance difference was not its own. */
+  costNote?: string;
   /** The request ended without a clear answer (dropped connection or timeout); a charge may still land. */
   uncertain?: boolean;
 };
