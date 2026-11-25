@@ -15,9 +15,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { capChangeWarning, clipboardPasteKind, submitAfterUncertainFailure } from "@/lib/reference-images";
-import { ImageViewer, collectViewerImages } from "./image-viewer";
+import { ImageViewer, collectViewerImages, type ViewerImage } from "./image-viewer";
 import { Segmented, SettingRow, Stage, StageCopy, StageSweep, formatPixels, ratioOf } from "./stage";
-import type { ConnectionView, Draft, EstimateView, HistoryCard, KeyOption, RunView } from "./view";
+import type { ConnectionView, Draft, EstimateView, HistoryCard, KeyOption, ReferenceView, RunView, ViewingRecord } from "./view";
 
 type StudioProps = {
   email: string;
@@ -34,10 +34,23 @@ type StudioProps = {
   selectedHistoryId: string | null;
   onSelectHistory: (id: string) => void;
   onDeleteHistory: (id: string) => void;
-  onCreate: () => void;
+  /** Return to the draft. Never clears it. */
+  onCompose: () => void;
+  /** Explicitly empty the draft prompt and its reference images. */
+  onClearDraft: () => void;
+  /** The past run being viewed read-only, or null while composing. */
+  viewing: ViewingRecord | null;
+  /** Copy a past run's prompt, settings and references into the draft. */
+  onReuse: (id: string) => void;
+  /** Paid requests still waiting on the upstream. Each has its own history card. */
+  inFlightIds: string[];
+  /** Page-wide limit on simultaneous requests. */
+  maxInFlight: number;
+  /** The last request ended without a clear answer, so the next submit needs an extra click. */
+  resubmitGuard: boolean;
   draft: Draft;
   onDraft: (patch: Partial<Draft>) => void;
-  references: { id: string; name: string; url: string }[];
+  references: ReferenceView[];
   referenceCap: number;
   referenceCapNote?: string;
   onAddReferences: (files: File[]) => void;
@@ -118,14 +131,37 @@ export function Studio(props: StudioProps) {
 
 function ImageDesk(props: StudioProps) {
   const stageRef = useRef<HTMLDivElement>(null);
+  const viewing = props.viewing;
+  const readOnly = viewing != null;
+  const shown = viewing ?? props.draft;
   const qualities = qualitiesFor(props.draft.model);
   const resolutions = resolutionsFor(props.draft.model);
+  const shownQualities = qualitiesFor(shown.model);
+  const shownResolutions = resolutionsFor(shown.model);
   const blocked = props.connection.state === "blocked";
-  const busy = props.run.status === "pending";
-  const canGenerate = !blocked && props.connection.state !== "loading" && !busy && Boolean(props.draft.prompt.trim());
-  const nextSize = pixelSize(props.draft.resolution, props.draft.aspect);
+  const running = props.inFlightIds.length;
+  const atCap = running >= props.maxInFlight;
+  const canGenerate =
+    !readOnly && !blocked && props.connection.state !== "loading" && !atCap && Boolean(props.draft.prompt.trim());
+  const nextSize = pixelSize(shown.resolution, shown.aspect);
   const gallery = useMemo(() => collectViewerImages(props.history, props.run), [props.history, props.run]);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [refViewer, setRefViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null);
+  const draftDirty = Boolean(props.draft.prompt.trim()) || props.references.length > 0;
+
+  function openReferences(list: ReferenceView[], index: number) {
+    if (list.length === 0) return;
+    setRefViewer({
+      index,
+      images: list.map((item, i) => ({
+        id: `ref:${item.id}`,
+        url: item.url,
+        name: item.name,
+        model: `参考图 ${i + 1}/${list.length}`,
+        size: item.width && item.height ? `${item.width}x${item.height}` : "",
+      })),
+    });
+  }
 
   function openViewer() {
     if (props.run.status !== "success" || gallery.length === 0) return;
@@ -156,39 +192,73 @@ function ImageDesk(props: StudioProps) {
   }
 
   return (
-    <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_320px]">
       <main className="flex min-h-0 flex-col">
-        <ImageStage ref={stageRef} run={props.run} nextSize={nextSize} draft={props.draft} onView={openViewer} />
+        <ImageStage
+          ref={stageRef}
+          run={props.run}
+          nextSize={nextSize}
+          draft={shown}
+          waiting={!readOnly && atCap ? props.maxInFlight : 0}
+          onView={openViewer}
+        />
         <Filmstrip
           history={props.history}
-          selectedId={props.selectedHistoryId}
+          viewingId={viewing?.id ?? null}
+          inFlightIds={props.inFlightIds}
+          draftPrompt={props.draft.prompt}
+          draftThumb={props.references[0]?.url}
+          draftReferenceCount={props.references.length}
+          draftDirty={draftDirty}
           onSelect={(id) => {
             props.onSelectHistory(id);
             revealStage();
           }}
+          onCompose={props.onCompose}
+          onClearDraft={props.onClearDraft}
           onDelete={props.onDeleteHistory}
-          onCreate={props.onCreate}
         />
-        <PromptDock
-          prompt={props.draft.prompt}
-          onPrompt={(prompt) => props.onDraft({ prompt })}
-          references={props.references}
-          referenceCap={props.referenceCap}
-          referenceCapNote={props.referenceCapNote}
-          onAddReferences={props.onAddReferences}
-          onRemoveReference={props.onRemoveReference}
-          onMoveReference={props.onMoveReference}
-          price={props.estimate ? formatUsd(props.estimate.totalUsd) : null}
-          busy={busy}
-          disabled={!canGenerate}
-          uncertain={props.run.status === "error" && Boolean(props.run.uncertain)}
-          onGenerate={generate}
-        />
+        {viewing ? (
+          <HistoryDock
+            viewing={viewing}
+            draftDirty={draftDirty}
+            onViewReference={(index) => openReferences(viewing.references, index)}
+            onReuse={() => props.onReuse(viewing.id)}
+            onCompose={props.onCompose}
+          />
+        ) : (
+          <PromptDock
+            prompt={props.draft.prompt}
+            onPrompt={(prompt) => props.onDraft({ prompt })}
+            references={props.references}
+            referenceCap={props.referenceCap}
+            referenceCapNote={props.referenceCapNote}
+            onAddReferences={props.onAddReferences}
+            onRemoveReference={props.onRemoveReference}
+            onMoveReference={props.onMoveReference}
+            onViewReference={(index) => openReferences(props.references, index)}
+            price={props.estimate ? formatUsd(props.estimate.totalUsd) : null}
+            running={running}
+            atCap={atCap}
+            disabled={!canGenerate}
+            uncertain={props.resubmitGuard}
+            onGenerate={generate}
+          />
+        )}
       </main>
 
       <aside className="space-y-6 border-t bg-card px-4 py-5 lg:min-h-0 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+        {readOnly ? (
+          <p className="rounded-lg bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
+            这是一条历史记录，设置只能查看。点「待生成」回到草稿继续编辑。
+          </p>
+        ) : null}
         <SettingRow label="模型">
-          <Select value={props.draft.model} onValueChange={(value) => value && props.onDraft({ model: value as Draft["model"] })}>
+          <Select
+            disabled={readOnly}
+            value={shown.model}
+            onValueChange={(value) => value && props.onDraft({ model: value as Draft["model"] })}
+          >
             <SelectTrigger className="w-full" aria-label="模型">
               <SelectValue />
             </SelectTrigger>
@@ -203,13 +273,13 @@ function ImageDesk(props: StudioProps) {
         </SettingRow>
 
         <SettingRow label="质量">
-          {qualities.length > 1 ? (
-            <Select value={props.draft.quality} onValueChange={(value) => value && props.onDraft({ quality: value })}>
+          {shownQualities.length > 1 ? (
+            <Select disabled={readOnly} value={shown.quality} onValueChange={(value) => value && props.onDraft({ quality: value })}>
               <SelectTrigger className="w-full" aria-label="质量">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {qualities.map((quality) => (
+                {shownQualities.map((quality) => (
                   <SelectItem key={quality} value={quality}>
                     {quality}
                   </SelectItem>
@@ -224,10 +294,11 @@ function ImageDesk(props: StudioProps) {
         <SettingRow label="分辨率">
           <Segmented
             label="分辨率"
-            value={props.draft.resolution}
+            disabled={readOnly}
+            value={shown.resolution}
             onChange={(resolution) => props.onDraft({ resolution })}
-            options={resolutions.map((resolution) => {
-              const unit = mediaUnitPrice(props.draft.model, resolution);
+            options={shownResolutions.map((resolution) => {
+              const unit = mediaUnitPrice(shown.model, resolution);
               return { value: resolution, label: resolution, hint: unit == null ? "—" : `${unit.toFixed(2)} USD` };
             })}
           />
@@ -239,7 +310,8 @@ function ImageDesk(props: StudioProps) {
               <AspectTile
                 key={aspect}
                 aspect={aspect}
-                active={props.draft.aspect === aspect}
+                active={shown.aspect === aspect}
+                disabled={readOnly}
                 onClick={() => props.onDraft({ aspect })}
               />
             ))}
@@ -250,7 +322,7 @@ function ImageDesk(props: StudioProps) {
           <p className="text-sm">每次 1 张</p>
         </SettingRow>
 
-        {props.keys.length > 1 && props.selectedKeyId != null ? (
+        {!readOnly && props.keys.length > 1 && props.selectedKeyId != null ? (
           <SettingRow label="使用的密钥">
             <Select value={String(props.selectedKeyId)} onValueChange={(value) => value && props.onSelectKey(Number(value))}>
               <SelectTrigger className="w-full" aria-label="使用的密钥">
@@ -268,7 +340,17 @@ function ImageDesk(props: StudioProps) {
         ) : null}
 
         <ConnectionNote embedded={props.embedded} connection={props.connection} />
-        <EstimateBlock estimate={props.estimate} frozen={props.frozenBalance} />
+        {viewing ? (
+          <div className="border-t pt-5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="text-sm">这条记录的预估</span>
+              <span className="text-xl font-medium tabular-nums">{formatUsd(viewing.estimateUsd)}</span>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">实际扣费见画布下方的结果栏。</p>
+          </div>
+        ) : (
+          <EstimateBlock estimate={props.estimate} frozen={props.frozenBalance} />
+        )}
       </aside>
       {viewerIndex != null && gallery.length > 0 ? (
         <ImageViewer
@@ -278,11 +360,19 @@ function ImageDesk(props: StudioProps) {
           onClose={() => setViewerIndex(null)}
         />
       ) : null}
+      {refViewer ? (
+        <ImageViewer
+          images={refViewer.images}
+          index={refViewer.index}
+          onIndex={(index) => setRefViewer((current) => (current ? { ...current, index } : current))}
+          onClose={() => setRefViewer(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function AspectTile({ aspect, active, onClick }: { aspect: string; active: boolean; onClick: () => void }) {
+function AspectTile({ aspect, active, disabled, onClick }: { aspect: string; active: boolean; disabled?: boolean; onClick: () => void }) {
   const ratio = ratioOf(aspect);
   const box = 22;
   const w = ratio >= 1 ? box : Math.round(box * ratio);
@@ -291,9 +381,14 @@ function AspectTile({ aspect, active, onClick }: { aspect: string; active: boole
     <button
       type="button"
       aria-pressed={active}
+      disabled={disabled}
       onClick={onClick}
-      className={`flex h-14 flex-col items-center justify-center gap-1 rounded-md text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
-        active ? "bg-primary/8 text-primary ring-1 ring-primary" : "text-muted-foreground ring-1 ring-border hover:bg-accent hover:text-foreground"
+      className={`flex h-14 flex-col items-center justify-center gap-1 rounded-md text-xs tabular-nums outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed ${
+        active
+          ? "bg-primary/8 text-primary ring-1 ring-primary"
+          : disabled
+            ? "text-muted-foreground/70 ring-1 ring-border"
+            : "text-muted-foreground ring-1 ring-border hover:bg-accent hover:text-foreground"
       }`}
     >
       <span aria-hidden className="grid size-6 place-items-center">
@@ -312,12 +407,15 @@ function ImageStage({
   run,
   nextSize,
   draft,
+  waiting,
   onView,
 }: {
   ref: Ref<HTMLDivElement>;
   run: RunView;
   nextSize: string;
-  draft: Draft;
+  draft: Pick<Draft, "resolution" | "aspect">;
+  /** Non-zero when the page is at its request limit; the value is that limit. */
+  waiting: number;
   onView: () => void;
 }) {
   if (run.status === "success") {
@@ -370,7 +468,9 @@ function ImageStage({
   return (
     <Stage ref={ref} ratio={ratioOf(nextSize)}>
       <StageCopy big={formatPixels(nextSize)}>
-        {draft.resolution}，{draft.aspect}。在下方写好描述后生成，结果会出现在这个框里。
+        {waiting
+          ? `已有 ${waiting} 张在生成，完成一张后才能再提交。草稿会一直保留。`
+          : `${draft.resolution}，${draft.aspect}。在下方写好描述后生成，结果会出现在这个框里。`}
       </StageCopy>
     </Stage>
   );
@@ -402,7 +502,7 @@ function ResultBar({ run, onView }: { run: Extract<RunView, { status: "success" 
         <span className="font-medium">{run.model}</span>
         <span className="text-muted-foreground tabular-nums">{formatPixels(run.size)}</span>
         <Figure label="预估" value={formatUsd(run.estimateUsd)} />
-        <Figure label="扣费" value={run.costUsd == null ? "接口未返回" : formatUsd(run.costUsd)} />
+        <Figure label="扣费" value={run.costUsd == null ? (run.costNote ? "无法单独核算" : "接口未返回") : formatUsd(run.costUsd)} />
         <Figure label="余额" value={formatUsd(run.balanceAfter)} />
         {image ? (
           <div className="ml-auto flex items-center gap-2">
@@ -417,6 +517,7 @@ function ResultBar({ run, onView }: { run: Extract<RunView, { status: "success" 
           </div>
         ) : null}
       </div>
+      {run.costNote ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{run.costNote}。</p> : null}
       {run.revisedPrompt ? <p className="mt-1.5 text-xs leading-5 text-muted-foreground">模型改写后的描述：{run.revisedPrompt}</p> : null}
       <UsageDetails usage={run.usage} />
     </div>
@@ -452,130 +553,103 @@ function UsageDetails({ usage }: { usage: UsageNumbers | null }) {
 
 const COMPOSE_DRAFT_ID = "compose-draft";
 
-type StripItem = HistoryCard & { draft?: boolean };
-
-const COMPOSE_DRAFT: StripItem = {
-  id: COMPOSE_DRAFT_ID,
-  createdAt: "",
-  prompt: "",
-  model: "",
-  size: "",
-  status: "pending",
-  draft: true,
-};
-
 function Filmstrip({
   history,
-  selectedId,
+  viewingId,
+  inFlightIds,
+  draftPrompt,
+  draftThumb,
+  draftReferenceCount,
+  draftDirty,
   onSelect,
+  onCompose,
+  onClearDraft,
   onDelete,
-  onCreate,
 }: {
   history: HistoryCard[];
-  selectedId: string | null;
+  viewingId: string | null;
+  inFlightIds: string[];
+  draftPrompt: string;
+  draftThumb?: string;
+  draftReferenceCount: number;
+  draftDirty: boolean;
   onSelect: (id: string) => void;
+  onCompose: () => void;
+  onClearDraft: () => void;
   onDelete: (id: string) => void;
-  onCreate: () => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  const [draftOn, setDraftOn] = useState(false);
-  const [draftActive, setDraftActive] = useState(false);
-  const [anchorId, setAnchorId] = useState<string | null>(null);
-  const openedOver = useRef<string | null>(null);
-  const fromStrip = useRef(false);
-  useEffect(() => setConfirming(false), [selectedId]);
-
-  const draftSuperseded =
-    draftOn &&
-    draftActive &&
-    selectedId != null &&
-    selectedId !== openedOver.current &&
-    history.some((item) => item.id === selectedId);
-  const showDraft = draftOn && !draftSuperseded;
-
-  useEffect(() => {
-    if (fromStrip.current) {
-      fromStrip.current = false;
-      return;
-    }
-    if (!draftSuperseded) return;
-    setDraftOn(false);
-    setDraftActive(false);
-    setAnchorId(null);
-    openedOver.current = null;
-  }, [draftSuperseded, selectedId]);
-
-  function create() {
-    if (!showDraft) openedOver.current = selectedId;
-    setAnchorId((current) => (showDraft ? current : selectedId));
-    setDraftOn(true);
-    setDraftActive(true);
-    onCreate();
-  }
-
-  function cancelDraft() {
-    const anchor = anchorId;
-    setDraftOn(false);
-    setDraftActive(false);
-    setAnchorId(null);
-    openedOver.current = null;
-    if (anchor && history.some((item) => item.id === anchor)) onSelect(anchor);
-  }
-
-  function selectItem(id: string) {
-    if (id === COMPOSE_DRAFT_ID) {
-      const already = showDraft && draftActive && selectedId == null;
-      setDraftActive(true);
-      if (!already) onCreate();
-      return;
-    }
-    if (id !== selectedId) fromStrip.current = true;
-    setDraftActive(false);
-    onSelect(id);
-  }
-
-  const visualId = showDraft && draftActive ? COMPOSE_DRAFT_ID : selectedId;
-  const items: StripItem[] = showDraft ? [COMPOSE_DRAFT, ...history] : history;
-  const selected = items.find((item) => item.id === visualId) ?? null;
+  const [confirming, setConfirming] = useState<"delete" | "clear" | null>(null);
+  useEffect(() => setConfirming(null), [viewingId]);
+  const composing = viewingId == null;
+  const selected = viewingId ? history.find((item) => item.id === viewingId) ?? null : null;
 
   return (
     <div className="flex items-center gap-3 border-t bg-background px-3 py-3 md:px-4">
       <button
         type="button"
-        onClick={create}
-        title="新建：清空描述和结果"
+        onClick={onCompose}
+        title="回到待生成的草稿。草稿内容不会被清空。"
         className="flex h-[92px] w-[4.75rem] shrink-0 items-center justify-center self-center rounded-xl border border-dashed border-[#c5cad3] bg-card text-sm whitespace-nowrap text-muted-foreground outline-none hover:border-foreground/30 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
       >
         + 新建
       </button>
       <ol className="flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto px-1 py-1" aria-label="生成记录">
-        {items.length === 0 ? (
-          <li className="self-center text-xs text-muted-foreground">生成记录只保存在这台浏览器里，换设备不会同步。</li>
+        <li className="shrink-0">
+          <DraftCardButton
+            selected={composing}
+            prompt={draftPrompt}
+            thumb={draftThumb}
+            referenceCount={draftReferenceCount}
+            onSelect={onCompose}
+          />
+        </li>
+        {history.length === 0 ? (
+          <li className="self-center px-2 text-xs text-muted-foreground">生成记录只保存在这台浏览器里，换设备不会同步。</li>
         ) : (
-          items.map((item) => (
+          history.map((item) => (
             <li key={item.id} className="shrink-0">
-              <HistoryCardButton item={item} selected={item.id === visualId} onSelect={selectItem} />
+              <HistoryCardButton item={item} selected={item.id === viewingId} onSelect={onSelect} />
             </li>
           ))
         )}
       </ol>
-      {selected?.draft ? (
-        <Button size="sm" variant="ghost" className="shrink-0 text-muted-foreground" onClick={cancelDraft}>
-          <X />
-          取消新建
-        </Button>
-      ) : selected ? (
-        confirming ? (
+      {composing ? (
+        draftDirty ? (
+          confirming === "clear" ? (
+            <div className="flex shrink-0 gap-1">
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => {
+                  setConfirming(null);
+                  onClearDraft();
+                }}
+              >
+                确认清空
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
+                取消
+              </Button>
+            </div>
+          ) : (
+            <Button size="sm" variant="ghost" aria-label="清空草稿" className="shrink-0 text-muted-foreground" onClick={() => setConfirming("clear")}>
+              <X />
+              <span className="hidden sm:inline">清空草稿</span>
+            </Button>
+          )
+        ) : null
+      ) : selected && !inFlightIds.includes(selected.id) ? (
+        confirming === "delete" ? (
           <div className="flex shrink-0 gap-1">
             <Button size="sm" variant="destructive" onClick={() => onDelete(selected.id)}>
               确认删除
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
               取消
             </Button>
           </div>
         ) : (
-          <Button size="sm" variant="ghost" className="shrink-0 text-muted-foreground" onClick={() => setConfirming(true)}>
+          <Button size="sm" variant="ghost" aria-label="删除这条" className="shrink-0 text-muted-foreground" onClick={() => setConfirming("delete")}>
             <Trash2 />
             <span className="hidden sm:inline">删除这条</span>
           </Button>
@@ -585,65 +659,205 @@ function Filmstrip({
   );
 }
 
+const CARD_CLASS =
+  "flex h-[108px] w-[260px] shrink-0 items-center gap-2.5 rounded-xl p-2 text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+function DraftCardButton({
+  selected,
+  prompt,
+  thumb,
+  referenceCount,
+  onSelect,
+}: {
+  selected: boolean;
+  prompt: string;
+  thumb?: string;
+  referenceCount: number;
+  onSelect: () => void;
+}) {
+  const summary = prompt.trim() || "写好描述后生成";
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      data-card={COMPOSE_DRAFT_ID}
+      aria-current={selected ? "true" : undefined}
+      aria-label={`待生成：${summary}${referenceCount ? `，${referenceCount} 张参考图` : ""}${selected ? "，当前" : ""}`}
+      title={prompt.trim() || "写好描述后生成"}
+      className={`${CARD_CLASS} ${selected ? "bg-primary/10 ring-2 ring-primary" : "bg-card ring-1 ring-border hover:ring-foreground/25"}`}
+    >
+      <span
+        className={`relative grid size-[92px] shrink-0 place-items-center overflow-hidden rounded-lg border border-dashed ${
+          selected ? "border-primary/45 bg-primary/10 text-primary" : "border-border bg-muted/70 text-muted-foreground"
+        }`}
+      >
+        {thumb ? <img src={thumb} alt="" className="size-full object-cover opacity-80" /> : <ImageIcon className="size-6" strokeWidth={1.5} />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className={`block truncate text-[13px] leading-5 font-medium ${selected ? "text-primary" : "text-foreground"}`}>待生成</span>
+        <span className="mt-0.5 line-clamp-2 text-xs leading-4 text-muted-foreground">{summary}</span>
+        {referenceCount ? <span className="mt-0.5 block text-[11px] text-muted-foreground">{referenceCount} 张参考图</span> : null}
+        {selected ? (
+          <span className="mt-1 inline-flex h-5 items-center rounded-md bg-primary/15 px-1.5 text-[11px] font-medium text-primary">当前</span>
+        ) : null}
+      </span>
+    </button>
+  );
+}
+
 function HistoryCardButton({
   item,
   selected,
   onSelect,
 }: {
-  item: StripItem;
+  item: HistoryCard;
   selected: boolean;
   onSelect: (id: string) => void;
 }) {
-  const label = item.draft
-    ? `待生成，写好描述后生成${selected ? "，新的一次" : ""}`
-    : `${item.model}，${formatPixels(item.size)}${item.status === "succeeded" ? "" : `，${STATUS_LABEL[item.status]}`}${selected ? "，当前" : ""}`;
+  const refs = item.referenceCount ? `，${item.referenceCount} 张参考图` : "";
+  const label = `${item.model}，${formatPixels(item.size)}${item.status === "succeeded" ? "" : `，${STATUS_LABEL[item.status]}`}${refs}${selected ? "，当前" : ""}`;
   return (
     <button
       type="button"
       onClick={() => onSelect(item.id)}
       aria-current={selected ? "true" : undefined}
       aria-label={label}
-      title={item.draft ? "写好描述后生成" : item.prompt || "未填写提示词"}
-      className={`flex h-[108px] w-[260px] shrink-0 items-center gap-2.5 rounded-xl p-2 text-left outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-        selected ? "bg-primary/10 ring-2 ring-primary" : "bg-card ring-1 ring-border hover:ring-foreground/25"
-      }`}
+      title={item.prompt || "未填写提示词"}
+      className={`${CARD_CLASS} ${selected ? "bg-primary/10 ring-2 ring-primary" : "bg-card ring-1 ring-border hover:ring-foreground/25"}`}
     >
-      {item.draft ? (
-        <span
-          className={`grid size-[92px] shrink-0 place-items-center rounded-lg border border-dashed ${
-            selected ? "border-primary/45 bg-primary/10 text-primary" : "border-border bg-muted/70 text-muted-foreground"
-          }`}
-        >
-          <ImageIcon className="size-6" strokeWidth={1.5} />
-        </span>
-      ) : (
-        <span className="relative size-[92px] shrink-0 overflow-hidden rounded-lg bg-muted">
-          {item.thumbUrl ? <img src={item.thumbUrl} alt="" className="size-full object-cover" /> : null}
-          {item.status === "succeeded" ? null : (
-            <span
-              className={`absolute inset-x-0 bottom-0 py-0.5 text-center text-[11px] ${
-                item.status === "pending" ? "bg-card/90 text-foreground" : "bg-destructive/85 text-white"
-              }`}
-            >
-              {STATUS_LABEL[item.status]}
-            </span>
-          )}
-        </span>
-      )}
-      <span className="min-w-0 flex-1">
-        <span className={`block truncate text-[13px] leading-5 font-medium ${item.draft && selected ? "text-primary" : "text-foreground"}`}>
-          {item.draft ? "待生成" : item.model}
-        </span>
-        <span className="mt-0.5 block truncate text-xs text-muted-foreground tabular-nums">
-          {item.draft ? "写好描述后生成" : formatPixels(item.size)}
-        </span>
-        {selected ? (
-          <span className="mt-1.5 inline-flex h-5 items-center rounded-md bg-primary/15 px-1.5 text-[11px] font-medium text-primary">
-            {item.draft ? "新的一次" : "当前"}
+      <span className="relative size-[92px] shrink-0 overflow-hidden rounded-lg bg-muted">
+        {item.thumbUrl ? <img src={item.thumbUrl} alt="" className="size-full object-cover" /> : null}
+        {item.status === "succeeded" ? null : (
+          <span
+            className={`absolute inset-x-0 bottom-0 py-0.5 text-center text-[11px] ${
+              item.status === "pending" ? "bg-card/90 text-foreground" : "bg-destructive/85 text-white"
+            }`}
+          >
+            {STATUS_LABEL[item.status]}
           </span>
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] leading-5 font-medium text-foreground">{item.model}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground tabular-nums">{formatPixels(item.size)}</span>
+        {item.referenceCount ? <span className="mt-0.5 block text-[11px] text-muted-foreground">{item.referenceCount} 张参考图</span> : null}
+        {selected ? (
+          <span className="mt-1 inline-flex h-5 items-center rounded-md bg-primary/15 px-1.5 text-[11px] font-medium text-primary">当前</span>
         ) : null}
       </span>
     </button>
+  );
+}
+
+function ReferenceChip({
+  item,
+  index,
+  onView,
+  children,
+}: {
+  item: ReferenceView;
+  index: number;
+  onView: (index: number) => void;
+  children?: ReactNode;
+}) {
+  return (
+    <span className="flex max-w-56 items-center gap-1 rounded-md bg-accent py-1 pr-1 pl-1 text-xs">
+      <button
+        type="button"
+        onClick={() => onView(index)}
+        aria-haspopup="dialog"
+        aria-label={`查看参考图 ${item.name}`}
+        title="查看大图"
+        className="flex min-w-0 cursor-zoom-in items-center gap-1.5 rounded outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <img src={item.url} alt="" className="size-7 shrink-0 rounded object-cover" />
+        <span className="min-w-0 truncate">{item.name}</span>
+      </button>
+      {children}
+    </span>
+  );
+}
+
+function HistoryDock({
+  viewing,
+  draftDirty,
+  onViewReference,
+  onReuse,
+  onCompose,
+}: {
+  viewing: ViewingRecord;
+  draftDirty: boolean;
+  onViewReference: (index: number) => void;
+  onReuse: () => void;
+  onCompose: () => void;
+}) {
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  useEffect(() => setConfirmReplace(false), [viewing.id]);
+  const missing = Math.max(0, viewing.referenceCount - viewing.references.length);
+  const missingNote =
+    viewing.references.length === 0 && viewing.mode === "edit" && viewing.referenceCount === 0
+      ? "这条是按参考图编辑的旧记录，当时没有保存参考图。"
+      : missing > 0
+        ? viewing.referencesDropped
+          ? `有 ${missing} 张参考图因为浏览器空间不足没有保存。`
+          : `有 ${missing} 张参考图没有保存。`
+        : null;
+  return (
+    <div className="border-t bg-background px-3 pt-1 pb-3 md:px-4">
+      <div className="rounded-xl bg-muted/60 ring-1 ring-border">
+        <label htmlFor="history-prompt" className="sr-only">
+          这条记录的描述（只读）
+        </label>
+        <textarea
+          id="history-prompt"
+          readOnly
+          aria-readonly="true"
+          value={viewing.prompt}
+          className="block field-sizing-content max-h-[32vh] min-h-20 w-full cursor-default resize-none bg-transparent px-3.5 pt-3 pb-1 text-base leading-7 text-foreground/85 outline-none md:text-[15px]"
+        />
+        <div className="flex flex-wrap items-center gap-2 px-2 pb-2">
+          {viewing.references.map((item, index) => (
+            <ReferenceChip key={item.id} item={item} index={index} onView={onViewReference} />
+          ))}
+          {missingNote ? <span className="text-xs text-muted-foreground">{missingNote}</span> : null}
+          <span className="text-xs text-muted-foreground">历史记录只能查看，不能修改。</span>
+          <span className="ml-auto" />
+          {confirmReplace ? (
+            <>
+              <span className="text-xs text-muted-foreground">会替换当前草稿的描述、设置和参考图。</span>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  setConfirmReplace(false);
+                  onReuse();
+                }}
+              >
+                确认替换
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setConfirmReplace(false)}>
+                取消
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button type="button" size="sm" variant="ghost" onClick={onCompose}>
+                回到草稿
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                title="把这条的描述、设置和参考图带到草稿里，再自己决定是否生成"
+                onClick={() => (draftDirty ? setConfirmReplace(true) : onReuse())}
+              >
+                复用到草稿
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -669,22 +883,26 @@ function PromptDock({
   onAddReferences,
   onRemoveReference,
   onMoveReference,
+  onViewReference,
   price,
-  busy,
+  running,
+  atCap,
   disabled,
   uncertain,
   onGenerate,
 }: {
   prompt: string;
   onPrompt: (value: string) => void;
-  references: { id: string; name: string; url: string }[];
+  references: ReferenceView[];
   referenceCap: number;
   referenceCapNote?: string;
   onAddReferences: (files: File[]) => void;
   onRemoveReference: (id: string) => void;
   onMoveReference: (id: string, direction: -1 | 1) => void;
+  onViewReference: (index: number) => void;
   price: string | null;
-  busy: boolean;
+  running: number;
+  atCap: boolean;
   disabled: boolean;
   uncertain: boolean;
   onGenerate: () => void;
@@ -749,11 +967,7 @@ function PromptDock({
         />
         <div className="flex flex-wrap items-center gap-2 px-2 pb-2">
           {references.map((item, index) => (
-            <span key={item.id} className="flex max-w-56 items-center gap-1 rounded-md bg-accent py-1 pr-1 pl-1 text-xs">
-              <img src={item.url} alt="" className="size-7 rounded object-cover" />
-              <span className="min-w-0 truncate" title={item.name}>
-                {item.name}
-              </span>
+            <ReferenceChip key={item.id} item={item} index={index} onView={onViewReference}>
               {references.length > 1 ? (
                 <>
                   <Button type="button" size="icon-xs" variant="ghost" aria-label={`前移 ${item.name}`} disabled={index === 0} onClick={() => onMoveReference(item.id, -1)}>
@@ -774,7 +988,7 @@ function PromptDock({
               <Button type="button" size="icon-xs" variant="ghost" onClick={() => onRemoveReference(item.id)} aria-label={`移除参考图 ${item.name}`}>
                 <X />
               </Button>
-            </span>
+            </ReferenceChip>
           ))}
           {showPicker ? (
             <label
@@ -800,15 +1014,28 @@ function PromptDock({
           {referenceCapNote ? <span className="max-w-xs text-xs leading-5 text-muted-foreground">{referenceCapNote}</span> : null}
           <span className="text-xs text-muted-foreground tabular-nums">{prompt.length}/4000</span>
           <span className="hidden text-xs text-muted-foreground lg:inline">Ctrl 或 ⌘ + Enter 提交</span>
-          <span className="ml-auto text-sm tabular-nums">{price}</span>
+          {running > 0 ? (
+            <span className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground" role="status">
+              <Loader2 className="size-3.5 animate-spin" />
+              {running} 张生成中
+            </span>
+          ) : null}
+          <span className={`${running > 0 ? "" : "ml-auto "}text-sm tabular-nums`}>{price}</span>
           <Button
             type="button"
             className="h-9 px-4"
             disabled={disabled}
             onClick={requestSubmit}
           >
-            {busy ? <Loader2 className="animate-spin" /> : null}
-            {uncertain && !confirmResubmit ? "先核对记录" : uncertain ? "确认再提交一次" : references.length > 0 ? "按参考图编辑" : "生成图片"}
+            {atCap
+              ? "已达同时上限"
+              : uncertain && !confirmResubmit
+                ? "先核对记录"
+                : uncertain
+                  ? "确认再提交一次"
+                  : references.length > 0
+                    ? "按参考图编辑"
+                    : "生成图片"}
           </Button>
         </div>
       </div>

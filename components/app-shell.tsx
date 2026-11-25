@@ -19,17 +19,19 @@ import { isMediaKey, keyBlockReason, keyLabel, pickImageKey } from "@/lib/keys";
 import { DEFAULT_ASPECT, DEFAULT_MODEL, DEFAULT_QUALITY, DEFAULT_RESOLUTION, FIXED_COUNT, isImageModelId, pixelSize, resolutionsFor } from "@/lib/models";
 import { chargeFromBalance, estimateImageCost } from "@/lib/pricing";
 import { editRejection } from "@/lib/reference-images";
+import { persistAttempts, snapshotReference } from "@/lib/reference-snapshot";
+import { BalanceSequencer, ImageRequestTracker, MAX_CONCURRENT_IMAGES, OVERLAP_COST_NOTE } from "@/lib/image-concurrency";
 import { clearSession, isEmbedded, readPreferredKeyId, readSession, stripSensitiveQueryInPlace, writePreferredKeyId, writeSession } from "@/lib/session";
 import { aspectValue } from "@/lib/models";
-import type { ApiKeyRecord, HistoryRecord, PublicSettings, PublicUser, StoredSession } from "@/lib/types";
+import type { ApiKeyRecord, HistoryRecord, HistoryReference, PublicSettings, PublicUser, StoredSession } from "@/lib/types";
 import { LoginScreen } from "@/components/auth/login-screen";
 import { CropDialog } from "@/components/studio/crop-dialog";
 import { Studio } from "@/components/studio/studio";
 import { useReferenceTray } from "@/components/studio/use-references";
 import { VideoDesk } from "@/components/studio/video-desk";
-import type { ConnectionView, Draft, HistoryCard, RunView } from "@/components/studio/view";
+import type { ConnectionView, Draft, HistoryCard, ReferenceView, RunView, ViewingRecord } from "@/components/studio/view";
 
-type LiveRecord = HistoryRecord & { urls: string[] };
+type LiveRecord = HistoryRecord & { urls: string[]; refs: ReferenceView[] };
 
 const EMPTY_DRAFT: Draft = {
   prompt: "",
@@ -51,20 +53,44 @@ export function AppShell() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const references = useReferenceTray(draft.model);
   const [history, setHistory] = useState<LiveRecord[]>([]);
+  /** The history record being viewed read-only. null means the draft is shown. */
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [run, setRun] = useState<RunView>({ status: "idle" });
+  /** Paid requests still waiting on the upstream, at most MAX_CONCURRENT_IMAGES. Each owns its own history record. */
+  const trackerRef = useRef(new ImageRequestTracker(MAX_CONCURRENT_IMAGES));
+  const balanceSeqRef = useRef(new BalanceSequencer());
+  const [inFlightIds, setInFlightIds] = useState<string[]>([]);
+  const balanceRef = useRef<number | null>(null);
+  balanceRef.current = user?.balance ?? null;
+  const [resubmitGuard, setResubmitGuard] = useState(false);
   const urlsRef = useRef<string[]>([]);
+  const historyRef = useRef<LiveRecord[]>([]);
+  historyRef.current = history;
 
   const replaceHistory = useCallback((records: HistoryRecord[]) => {
     urlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     const live = records.map((record) => ({
       ...record,
       urls: record.images.flatMap((image) => (image.blob ? [URL.createObjectURL(image.blob)] : [])),
+      refs: (record.references ?? []).map((ref, index) => ({
+        id: `${record.id}:${index}`,
+        name: ref.name,
+        url: URL.createObjectURL(ref.blob),
+        width: ref.width,
+        height: ref.height,
+      })),
     }));
-    urlsRef.current = live.flatMap((record) => record.urls);
+    urlsRef.current = live.flatMap((record) => [...record.urls, ...record.refs.map((ref) => ref.url)]);
+    historyRef.current = live;
     setHistory(live);
     return live;
   }, []);
+
+  /** Rebuild the strip from the latest records, swapping one in. Reads a ref so late async callers don't revive deleted rows. */
+  const upsertHistory = useCallback(
+    (record: HistoryRecord) =>
+      replaceHistory([record, ...historyRef.current.filter((item) => item.id !== record.id).map(stripUrls)]),
+    [replaceHistory],
+  );
 
   const hydrate = useCallback(
     async (nextSession: StoredSession) => {
@@ -171,20 +197,42 @@ export function AppShell() {
     };
   }, [keys, selectedKey, user]);
 
-  async function persist(record: HistoryRecord) {
-    try {
-      await saveHistory(record);
-    } catch {
-      await saveHistory({
-        ...record,
-        images: [],
-        error: [record.error, "图片太大，未能保存在这台浏览器。"].filter(Boolean).join(" "),
-      });
+  /** Saves the fullest form the browser will accept and returns what was actually stored. */
+  async function persist(record: HistoryRecord): Promise<HistoryRecord> {
+    const attempts = persistAttempts(record);
+    for (const attempt of attempts) {
+      try {
+        await saveHistory(attempt);
+        return attempt;
+      } catch {
+        // try a leaner copy
+      }
     }
+    return attempts[attempts.length - 1];
   }
 
-  function showRecord(record: HistoryRecord) {
-    setSelectedHistoryId(record.id);
+  const viewed = selectedHistoryId ? history.find((item) => item.id === selectedHistoryId) ?? null : null;
+  const run: RunView = viewed ? recordToRun(viewed) : { status: "idle" };
+  const viewing: ViewingRecord | null = viewed
+    ? {
+        id: viewed.id,
+        prompt: viewed.prompt,
+        model: isImageModelId(viewed.model) ? viewed.model : DEFAULT_MODEL,
+        resolution: viewed.resolution,
+        aspect: viewed.aspect,
+        quality: viewed.quality,
+        estimateUsd: viewed.estimateUsd,
+        mode: viewed.mode,
+        references: viewed.refs,
+        referenceCount: viewed.referenceCount ?? viewed.refs.length,
+        referencesDropped: Boolean(viewed.referencesDropped),
+        inFlight: inFlightIds.includes(viewed.id),
+      }
+    : null;
+
+  function reuseRecord(id: string) {
+    const record = history.find((item) => item.id === id);
+    if (!record) return;
     const model = isImageModelId(record.model) ? record.model : DEFAULT_MODEL;
     const allowed = resolutionsFor(model);
     setDraft({
@@ -195,35 +243,17 @@ export function AppShell() {
       quality: record.quality,
       count: FIXED_COUNT,
     });
-    if (record.status === "pending") {
-      setRun({ status: "pending", startedAt: Date.parse(record.createdAt), mode: record.mode });
-      return;
-    }
-    if (record.status === "succeeded") {
-      const live = history.find((item) => item.id === record.id);
-      const images = [
-        ...(live?.urls.map((url, index) => ({ url, name: `jaxapi-${record.id}-${index + 1}.png` })) ?? []),
-        ...record.images
-          .filter((image) => image.remoteUrl)
-          .map((image, index) => ({ url: image.remoteUrl as string, name: `jaxapi-${record.id}-remote-${index + 1}.png` })),
-      ];
-      setRun({
-        status: "success",
-        images,
-        costUsd: record.costUsd,
-        balanceAfter: record.balanceAfter,
-        usage: record.usage,
-        estimateUsd: record.estimateUsd,
-        size: record.size,
-        model: record.model,
-      });
-      return;
-    }
-    setRun({ status: "error", message: record.error || "这次生成没有完成。", timeout: record.status === "timeout" });
+    const files = (record.references ?? []).map(
+      (ref) => new File([ref.blob], ref.name, { type: ref.mime || ref.blob.type || "image/webp" }),
+    );
+    references.load(files, model);
+    setSelectedHistoryId(null);
+    const missing = (record.referenceCount ?? files.length) - files.length;
+    if (missing > 0) toast.message(`这条记录有 ${missing} 张参考图没有保存，需要重新添加。`);
   }
 
   async function onGenerate() {
-    if (!session || !user || !selectedKey || run.status === "pending") return;
+    if (!session || !user || !selectedKey || selectedHistoryId || !trackerRef.current.canStart()) return;
     const prompt = draft.prompt.trim();
     if (!prompt) return;
     const files = references.items.map((item) => item.file);
@@ -235,6 +265,20 @@ export function AppShell() {
     const size = pixelSize(draft.resolution, draft.aspect);
     const mode = files.length > 0 ? "edit" : "generate";
     const id = crypto.randomUUID();
+    if (!trackerRef.current.start(id)) return;
+    setInFlightIds(trackerRef.current.ids());
+    setResubmitGuard(false);
+    // Read once at submit; later requests change the live balance.
+    const balanceBefore = balanceRef.current;
+    const activeSession = session;
+    let kept: HistoryReference[] = [];
+    try {
+      kept = (await Promise.all(files.map((file) => snapshotReference(file).catch(() => null)))).filter(
+        (item): item is HistoryReference => item !== null,
+      );
+    } catch {
+      kept = [];
+    }
     const createdAt = new Date().toISOString();
     const pending: HistoryRecord = {
       id,
@@ -254,11 +298,23 @@ export function AppShell() {
       balanceAfter: null,
       usage: null,
       images: [],
+      references: kept,
+      referenceCount: files.length,
+      referencesDropped: kept.length < files.length,
     };
-    await persist(pending);
-    replaceHistory([pending, ...history.filter((item) => item.id !== id).map(stripUrls)]);
-    setSelectedHistoryId(id);
-    setRun({ status: "pending", startedAt: Date.now(), mode });
+    // Keep the stored copy: it carries any references that survived the quota check.
+    let base: HistoryRecord;
+    try {
+      base = await persist(pending);
+      upsertHistory(base);
+      setSelectedHistoryId(id);
+    } catch {
+      // Nothing was sent upstream yet, so releasing the slot is safe.
+      trackerRef.current.finish(id);
+      setInFlightIds(trackerRef.current.ids());
+      toast.error("没能在这台浏览器建立记录，请求没有发出。");
+      return;
+    }
 
     const attempt = async (apiKey: string) =>
       requestImage({
@@ -290,62 +346,63 @@ export function AppShell() {
       const parsed = parseGenerationPayload(payload);
       const images = await Promise.all(parsed.images.map((image) => toHistoryImage(image)));
       if (images.length === 0) throw new Error("上游没有返回图片");
-      const refreshed = await fetchMe(session.accessToken).catch(() => null);
-      if (refreshed) {
-        setUser(refreshed);
-        writeSession({ ...session, user: refreshed });
-      }
+      const refreshed = await readBalance(activeSession);
+      const { overlapped } = trackerRef.current.finish(id);
       const done: HistoryRecord = {
-        ...pending,
+        ...base,
         status: "succeeded",
         images,
         usage: parsed.usage,
-        costUsd: chargeFromBalance(user.balance, refreshed?.balance ?? null),
+        costUsd: overlapped ? null : chargeFromBalance(balanceBefore, refreshed?.balance ?? null),
+        costNote: overlapped ? OVERLAP_COST_NOTE : undefined,
         balanceAfter: refreshed?.balance ?? null,
-      };
-      await persist(done);
-      const live = replaceHistory([done, ...history.filter((item) => item.id !== id).map(stripUrls)]);
-      const current = live.find((item) => item.id === id);
-      setRun({
-        status: "success",
-        images: [
-          ...(current?.urls.map((url, index) => ({ url, name: `jaxapi-${id}-${index + 1}.png` })) ?? []),
-          ...done.images.flatMap((image, index) =>
-            image.remoteUrl && !image.blob ? [{ url: image.remoteUrl, name: `jaxapi-${id}-remote-${index + 1}.png` }] : [],
-          ),
-        ],
         revisedPrompt: parsed.images.find((image) => image.revised)?.revised,
-        costUsd: done.costUsd,
-        balanceAfter: done.balanceAfter,
-        usage: done.usage,
-        estimateUsd: done.estimateUsd,
-        size,
-        model: draft.model,
-      });
+      };
+      base = await persist(done);
+      if (historyRef.current.some((item) => item.id === id)) upsertHistory(base);
+      // The person may have gone back to the draft meanwhile; announce instead of switching the view.
+      toast.success("图片生成好了");
     } catch (error) {
       const timeout = error instanceof JaxClientError && error.timeout;
       const uncertain = error instanceof JaxClientError && error.status === 0;
       let message = error instanceof Error ? error.message : "生成失败";
-      const refreshed = await fetchMe(session.accessToken).catch(() => null);
-      if (refreshed) {
-        const charged = chargeFromBalance(user.balance, refreshed.balance);
-        setUser(refreshed);
-        writeSession({ ...session, user: refreshed });
-        if (charged && charged > 0 && !message.includes("使用记录")) {
-          message += ` 账户余额已减少约 ${charged.toFixed(4)} USD，请到「使用记录」核对，不要立刻重复提交。`;
-        }
+      const refreshed = await readBalance(activeSession);
+      const { overlapped } = trackerRef.current.finish(id);
+      const charged = refreshed ? chargeFromBalance(balanceBefore, refreshed.balance) : null;
+      if (charged && charged > 0 && !message.includes("使用记录")) {
+        message += overlapped
+          ? " 这段时间还有其他请求，无法判断这一张是否扣费，请到「使用记录」核对，不要立刻重复提交。"
+          : ` 账户余额已减少约 ${charged.toFixed(4)} USD，请到「使用记录」核对，不要立刻重复提交。`;
       }
       const failed: HistoryRecord = {
-        ...pending,
+        ...base,
         status: timeout ? "timeout" : "failed",
         error: message,
-        costUsd: refreshed ? chargeFromBalance(user.balance, refreshed.balance) : pending.costUsd,
+        costUsd: overlapped ? null : refreshed ? charged : pending.costUsd,
+        costNote: overlapped ? OVERLAP_COST_NOTE : undefined,
         balanceAfter: refreshed?.balance ?? null,
+        uncertain: Boolean(uncertain || timeout),
       };
-      await persist(failed);
-      replaceHistory([failed, ...history.filter((item) => item.id !== id).map(stripUrls)]);
-      setRun({ status: "error", message, timeout, uncertain });
+      const stored = await persist(failed);
+      if (historyRef.current.some((item) => item.id === id)) upsertHistory(stored);
+      if (uncertain || timeout) setResubmitGuard(true);
+      toast.error("这次生成没有完成，详情见记录。");
+    } finally {
+      // finish() is idempotent; this also covers a throw before either branch reached it.
+      trackerRef.current.finish(id);
+      setInFlightIds(trackerRef.current.ids());
     }
+  }
+
+  /** Reads the balance and applies it only if no newer read has landed first. */
+  async function readBalance(activeSession: StoredSession): Promise<PublicUser | null> {
+    const ticket = balanceSeqRef.current.ticket();
+    const refreshed = await fetchMe(activeSession.accessToken).catch(() => null);
+    if (refreshed && balanceSeqRef.current.accept(ticket)) {
+      setUser(refreshed);
+      writeSession({ ...activeSession, user: refreshed });
+    }
+    return refreshed;
   }
 
   if (booting) {
@@ -372,6 +429,7 @@ export function AppShell() {
     size: item.size,
     status: item.status,
     thumbUrl: item.urls[0] || item.images.find((image) => image.remoteUrl)?.remoteUrl,
+    referenceCount: item.referenceCount ?? item.refs.length,
   }));
 
   return (
@@ -399,24 +457,24 @@ export function AppShell() {
         history={cards}
         selectedHistoryId={selectedHistoryId}
         onSelectHistory={(id) => {
-          const record = history.find((item) => item.id === id);
-          if (record) showRecord(stripUrls(record));
+          if (history.some((item) => item.id === id)) setSelectedHistoryId(id);
         }}
         onDeleteHistory={(id) => {
+          if (inFlightIds.includes(id)) return;
           void deleteHistory(id);
-          const next = history.filter((item) => item.id !== id);
-          replaceHistory(next.map(stripUrls));
-          if (selectedHistoryId === id) {
-            setSelectedHistoryId(null);
-            setRun({ status: "idle" });
-          }
+          replaceHistory(historyRef.current.filter((item) => item.id !== id).map(stripUrls));
+          if (selectedHistoryId === id) setSelectedHistoryId(null);
         }}
-        onCreate={() => {
-          setDraft(EMPTY_DRAFT);
+        onCompose={() => setSelectedHistoryId(null)}
+        onClearDraft={() => {
+          setDraft((current) => ({ ...current, prompt: "" }));
           references.clear();
-          setSelectedHistoryId(null);
-          setRun({ status: "idle" });
         }}
+        viewing={viewing}
+        onReuse={reuseRecord}
+        inFlightIds={inFlightIds}
+        maxInFlight={MAX_CONCURRENT_IMAGES}
+        resubmitGuard={resubmitGuard}
         draft={draft}
         onDraft={(patch) => setDraft((current) => ({ ...current, ...patch, count: FIXED_COUNT }))}
         references={references.items.map((item) => ({ id: item.id, name: item.name, url: item.url }))}
@@ -434,7 +492,12 @@ export function AppShell() {
             accountBalance={user.balance}
             enabled={Boolean(selectedKey && isMediaKey(selectedKey))}
             blockedReason={connection.state === "blocked" ? connection.summary : undefined}
-            onBalance={(balance) => setUser((current) => (current ? { ...current, balance } : current))}
+            onBalance={(balance) => {
+              // A video charge moves the balance under any running image request.
+              trackerRef.current.markBalanceMoved();
+              balanceSeqRef.current.accept(balanceSeqRef.current.ticket());
+              setUser((current) => (current ? { ...current, balance } : current));
+            }}
           />
         }
       />
@@ -453,8 +516,9 @@ export function AppShell() {
 }
 
 function stripUrls(record: LiveRecord | HistoryRecord): HistoryRecord {
-  const { urls, ...rest } = record as LiveRecord;
+  const { urls, refs, ...rest } = record as LiveRecord;
   void urls;
+  void refs;
   return rest;
 }
 
@@ -473,4 +537,35 @@ async function toHistoryImage(image: { b64?: string; url?: string }): Promise<Hi
     return { mime: "image/png", remoteUrl: image.url };
   }
   return { mime: "image/png" };
+}
+
+function recordToRun(record: LiveRecord): RunView {
+  if (record.status === "pending") {
+    return { status: "pending", startedAt: Date.parse(record.createdAt) || Date.now(), mode: record.mode };
+  }
+  if (record.status === "succeeded") {
+    return {
+      status: "success",
+      images: [
+        ...record.urls.map((url, index) => ({ url, name: `jaxapi-${record.id}-${index + 1}.png` })),
+        ...record.images.flatMap((image, index) =>
+          image.remoteUrl && !image.blob ? [{ url: image.remoteUrl, name: `jaxapi-${record.id}-remote-${index + 1}.png` }] : [],
+        ),
+      ],
+      revisedPrompt: record.revisedPrompt,
+      costUsd: record.costUsd,
+      costNote: record.costNote,
+      balanceAfter: record.balanceAfter,
+      usage: record.usage,
+      estimateUsd: record.estimateUsd,
+      size: record.size,
+      model: record.model,
+    };
+  }
+  return {
+    status: "error",
+    message: record.error || "这次生成没有完成。",
+    timeout: record.status === "timeout",
+    uncertain: Boolean(record.uncertain),
+  };
 }

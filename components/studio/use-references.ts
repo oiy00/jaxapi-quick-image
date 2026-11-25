@@ -117,6 +117,19 @@ export function useReferenceTray(model: string, capOverride?: number) {
     });
   }
 
+  /** Replaces the tray with files that were already accepted once (reusing a past run). Skips cropping. */
+  function load(files: File[], forModel?: string) {
+    const limit = forModel ? referenceCap(forModel, capOverride) : cap;
+    capRef.current = limit;
+    const kept = files.slice(0, Math.max(0, limit));
+    if (files.length > kept.length) toast.message(`这个模型最多 ${limit} 张参考图，只带入了前 ${kept.length} 张。`);
+    setItems((current) => {
+      current.forEach((item) => URL.revokeObjectURL(item.url));
+      return kept.map((file) => ({ id: crypto.randomUUID(), file, url: URL.createObjectURL(file), name: file.name }));
+    });
+    setQueue([]);
+  }
+
   function clear() {
     setItems((current) => {
       current.forEach((item) => URL.revokeObjectURL(item.url));
@@ -134,6 +147,7 @@ export function useReferenceTray(model: string, capOverride?: number) {
     dismissCrop,
     remove,
     move,
+    load,
     clear,
   };
 }

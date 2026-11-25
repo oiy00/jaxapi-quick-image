@@ -17,6 +17,28 @@ export type HistoryCard = {
   size: string;
   status: RunStatus;
   thumbUrl?: string;
+  /** Reference images the run carried (0 for text-to-image). */
+  referenceCount?: number;
+};
+
+export type ReferenceView = { id: string; name: string; url: string; width?: number; height?: number };
+
+/** A past run shown read-only. The draft is kept separately and is never overwritten by viewing. */
+export type ViewingRecord = {
+  id: string;
+  prompt: string;
+  model: ImageModelId;
+  resolution: ImageResolution;
+  aspect: string;
+  quality: string;
+  estimateUsd: number | null;
+  mode: "generate" | "edit";
+  references: ReferenceView[];
+  /** Count sent with the request; may exceed references.length for old records or when copies were dropped. */
+  referenceCount: number;
+  referencesDropped: boolean;
+  /** This run is still waiting on the upstream; it cannot be deleted until it settles. */
+  inFlight: boolean;
 };
 
 export type RunView =
@@ -28,6 +50,7 @@ export type RunView =
       images: { url: string; name: string }[];
       revisedPrompt?: string;
       costUsd: number | null;
+      costNote?: string;
       balanceAfter: number | null;
       usage: UsageNumbers | null;
       estimateUsd: number | null;

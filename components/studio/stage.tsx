@@ -97,15 +97,17 @@ export function Segmented<T extends string | number>({
   onChange,
   label,
   size = "md",
+  disabled = false,
 }: {
   value: T;
   options: { value: T; label: ReactNode; hint?: ReactNode }[];
   onChange: (value: T) => void;
   label: string;
   size?: "sm" | "md";
+  disabled?: boolean;
 }) {
   return (
-    <div role="group" aria-label={label} className="flex gap-0.5 rounded-lg bg-muted p-0.5">
+    <div role="group" aria-label={label} aria-disabled={disabled || undefined} className={`flex gap-0.5 rounded-lg bg-muted p-0.5 ${disabled ? "opacity-60" : ""}`}>
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -113,10 +115,11 @@ export function Segmented<T extends string | number>({
             key={String(option.value)}
             type="button"
             aria-pressed={active}
+            disabled={disabled}
             onClick={() => onChange(option.value)}
-            className={`flex flex-1 flex-col items-center justify-center rounded-md px-3 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+            className={`flex flex-1 flex-col items-center justify-center rounded-md px-3 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed ${
               size === "sm" ? "h-7 text-[0.8rem]" : option.hint ? "h-12" : "h-9 text-sm"
-            } ${active ? "bg-primary text-primary-foreground shadow-sm" : "text-foreground/70 hover:bg-card hover:text-foreground"}`}
+            } ${active ? "bg-primary text-primary-foreground shadow-sm" : disabled ? "text-foreground/70" : "text-foreground/70 hover:bg-card hover:text-foreground"}`}
           >
             <span className="font-medium">{option.label}</span>
             {option.hint ? (
