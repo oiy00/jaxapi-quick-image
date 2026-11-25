@@ -308,6 +308,10 @@ export function AppShell() {
       base = await persist(pending);
       upsertHistory(base);
       setSelectedHistoryId(id);
+      // The run now owns its prompt and references (kept in the record and in `files`).
+      // Start the next draft empty; model, size and quality carry over.
+      setDraft((current) => ({ ...current, prompt: "" }));
+      references.clear();
     } catch {
       // Nothing was sent upstream yet, so releasing the slot is safe.
       trackerRef.current.finish(id);

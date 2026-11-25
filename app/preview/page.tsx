@@ -267,6 +267,8 @@ export default function PreviewPage() {
         setHistory((current) => [pending, ...current]);
         setSelected(id);
         setInFlightIds((current) => [...current, id]);
+        setDraft((current) => ({ ...current, prompt: "" }));
+        references.clear();
         // Later submissions finish sooner, so results arrive out of order on purpose.
         const delay = Math.max(800, 4000 - inFlightIds.length * 700);
         window.setTimeout(() => {
