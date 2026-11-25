@@ -91,6 +91,15 @@ export type HistoryImage = {
   remoteUrl?: string;
 };
 
+/** A downscaled viewing copy of a reference image, kept with the history record in this browser only. */
+export type HistoryReference = {
+  blob: Blob;
+  mime: string;
+  name: string;
+  width?: number;
+  height?: number;
+};
+
 export type HistoryRecord = {
   id: string;
   userId: number;
@@ -110,6 +119,15 @@ export type HistoryRecord = {
   balanceAfter: number | null;
   usage: UsageNumbers | null;
   images: HistoryImage[];
+  /** Reference images sent with this run. Absent on records saved before references were kept. */
+  references?: HistoryReference[];
+  /** How many reference images the request carried, even when copies could not be kept. */
+  referenceCount?: number;
+  /** True when the browser could not keep the reference copies (quota or decode failure). */
+  referencesDropped?: boolean;
+  revisedPrompt?: string;
+  /** The request ended without a clear answer (dropped connection or timeout); a charge may still land. */
+  uncertain?: boolean;
 };
 
 export type PublicSettings = {

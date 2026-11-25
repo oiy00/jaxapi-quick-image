@@ -236,7 +236,7 @@ export function VideoDesk(props: VideoDeskProps) {
   const stageRatio = ratioOf(taskSpec ? VIDEO_PIXEL_SIZE[taskSpec.resolution] : pixels, 16 / 9);
 
   return (
-    <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_320px]">
       <main className="flex min-h-0 flex-col">
         <Stage
           ref={stageRef}

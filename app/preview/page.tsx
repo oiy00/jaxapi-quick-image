@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { CropDialog } from "@/components/studio/crop-dialog";
 import { Studio } from "@/components/studio/studio";
 import { useReferenceTray } from "@/components/studio/use-references";
 import { VideoDesk } from "@/components/studio/video-desk";
-import type { Draft, HistoryCard, RunView } from "@/components/studio/view";
+import type { Draft, HistoryCard, ReferenceView, RunView, ViewingRecord } from "@/components/studio/view";
 import {
   DEFAULT_ASPECT,
   DEFAULT_MODEL,
@@ -13,7 +13,6 @@ import {
   DEFAULT_RESOLUTION,
   FIXED_COUNT,
   aspectValue,
-  isImageModelId,
   pixelSize,
 } from "@/lib/models";
 import { estimateImageCost } from "@/lib/pricing";
@@ -29,6 +28,10 @@ function scene(width: number, height: number, sky: string, ground: string, accen
 
 const night = scene(1024, 1024, "#243044", "#33456e", "#f4efe4");
 const coast = scene(1024, 576, "#7eb0d4", "#c4a574", "#fff7e8");
+const sketch = scene(800, 600, "#d9e2ef", "#8a9bb8", "#ffffff");
+
+/** Preview-only details a real record keeps in IndexedDB. */
+type PreviewDetail = Omit<ViewingRecord, "id" | "inFlight">;
 
 const SEEDED: HistoryCard[] = [
   {
@@ -48,8 +51,36 @@ const SEEDED: HistoryCard[] = [
     size: "1024x576",
     status: "succeeded",
     thumbUrl: coast,
+    referenceCount: 1,
   },
 ];
+
+const SEEDED_DETAIL: Record<string, PreviewDetail> = {
+  "sample-night": {
+    prompt: SEEDED[0].prompt,
+    model: "gpt-image-2.5-flare",
+    resolution: "1K",
+    aspect: "1:1",
+    quality: "auto",
+    estimateUsd: 0.09,
+    mode: "generate",
+    references: [],
+    referenceCount: 0,
+    referencesDropped: false,
+  },
+  "sample-coast": {
+    prompt: SEEDED[1].prompt,
+    model: "gpt-image-2",
+    resolution: "1K",
+    aspect: "16:9",
+    quality: "auto",
+    estimateUsd: 0.09,
+    mode: "edit",
+    references: [{ id: "sample-coast:0", name: "海岸草图.png", url: sketch, width: 800, height: 600 }],
+    referenceCount: 1,
+    referencesDropped: false,
+  },
+};
 
 function successRun(card: HistoryCard): RunView {
   return {
@@ -66,39 +97,31 @@ function successRun(card: HistoryCard): RunView {
 
 export default function PreviewPage() {
   const [history, setHistory] = useState<HistoryCard[]>(SEEDED);
-  const [selected, setSelected] = useState<string | null>(SEEDED[0].id);
+  const [details, setDetails] = useState<Record<string, PreviewDetail>>(SEEDED_DETAIL);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [inFlightId, setInFlightId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>({
-    prompt: SEEDED[0].prompt,
+    prompt: "",
     model: DEFAULT_MODEL,
     resolution: DEFAULT_RESOLUTION,
     aspect: DEFAULT_ASPECT,
     quality: DEFAULT_QUALITY,
     count: 1,
   });
-  const [run, setRun] = useState<RunView>(successRun(SEEDED[0]));
   const [mockCap, setMockCap] = useState<1 | 5 | undefined>(undefined);
   const references = useReferenceTray(draft.model, mockCap);
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
-  const generation = useRef(0);
 
-  function showCard(card: HistoryCard) {
-    setSelected(card.id);
-    setDraft((current) => ({
-      ...current,
-      prompt: card.prompt,
-      model: isImageModelId(card.model) ? card.model : current.model,
-    }));
-    if (card.status === "succeeded" && card.thumbUrl) {
-      setRun(successRun(card));
-      return;
-    }
-    if (card.status === "pending") {
-      setRun({ status: "pending", startedAt: Date.parse(card.createdAt) || Date.now(), mode: "generate" });
-      return;
-    }
-    setRun({ status: "error", message: "这次生成没有完成。", timeout: card.status === "timeout" });
-  }
+  const card = selected ? history.find((item) => item.id === selected) ?? null : null;
+  const detail = card ? details[card.id] : undefined;
+  const viewing: ViewingRecord | null =
+    card && detail ? { ...detail, id: card.id, inFlight: card.id === inFlightId } : null;
+  const run: RunView = !card
+    ? { status: "idle" }
+    : card.status === "succeeded" && card.thumbUrl
+      ? successRun(card)
+      : card.status === "pending"
+        ? { status: "pending", startedAt: Date.parse(card.createdAt) || Date.now(), mode: detail?.mode ?? "generate" }
+        : { status: "error", message: "这次生成没有完成。", timeout: card.status === "timeout" };
 
   return (
     <>
@@ -138,23 +161,33 @@ export default function PreviewPage() {
       history={history}
       selectedHistoryId={selected}
       onSelectHistory={(id) => {
-        const card = history.find((item) => item.id === id);
-        if (card) showCard(card);
+        if (history.some((item) => item.id === id)) setSelected(id);
       }}
       onDeleteHistory={(id) => {
+        if (id === inFlightId) return;
         setHistory((current) => current.filter((item) => item.id !== id));
-        if (selectedRef.current === id) {
-          selectedRef.current = null;
-          setSelected(null);
-          setRun({ status: "idle" });
-        }
+        if (selected === id) setSelected(null);
       }}
-      onCreate={() => {
+      onCompose={() => setSelected(null)}
+      onClearDraft={() => {
         setDraft((current) => ({ ...current, prompt: "" }));
         references.clear();
-        setSelected(null);
-        setRun({ status: "idle" });
       }}
+      viewing={viewing}
+      onReuse={(id) => {
+        const source = details[id];
+        if (!source) return;
+        setDraft({ prompt: source.prompt, model: source.model, resolution: source.resolution, aspect: source.aspect, quality: source.quality, count: FIXED_COUNT });
+        void Promise.all(
+          source.references.map(async (ref) => {
+            const blob = await (await fetch(ref.url)).blob();
+            return new File([blob], ref.name, { type: blob.type || "image/svg+xml" });
+          }),
+        ).then((files) => references.load(files, source.model));
+        setSelected(null);
+      }}
+      inFlight={inFlightId != null}
+      resubmitGuard={false}
       draft={draft}
       onDraft={(patch) => setDraft((current) => ({ ...current, ...patch }))}
       references={references.items.map((item) => ({ id: item.id, name: item.name, url: item.url }))}
@@ -184,29 +217,45 @@ export default function PreviewPage() {
       }
       onGenerate={() => {
         const prompt = draft.prompt.trim();
-        if (!prompt) return;
-        const token = ++generation.current;
+        if (!prompt || inFlightId || selected) return;
         const id = crypto.randomUUID();
         const size = pixelSize(draft.resolution, draft.aspect);
-        const model = draft.model;
-        const createdAt = new Date().toISOString();
+        const refs: ReferenceView[] = references.items.map((item, index) => ({
+          id: `${id}:${index}`,
+          name: item.name,
+          url: URL.createObjectURL(item.file),
+        }));
         const pending: HistoryCard = {
           id,
-          createdAt,
+          createdAt: new Date().toISOString(),
           prompt,
-          model,
+          model: draft.model,
           size,
           status: "pending",
+          referenceCount: refs.length,
         };
-        setHistory((current) => [pending, ...current.filter((item) => item.id !== id)]);
+        setDetails((current) => ({
+          ...current,
+          [id]: {
+            prompt,
+            model: draft.model,
+            resolution: draft.resolution,
+            aspect: draft.aspect,
+            quality: draft.quality,
+            estimateUsd: estimateImageCost({ model: draft.model, resolution: draft.resolution, count: FIXED_COUNT })?.totalUsd ?? null,
+            mode: refs.length ? "edit" : "generate",
+            references: refs,
+            referenceCount: refs.length,
+            referencesDropped: false,
+          },
+        }));
+        setHistory((current) => [pending, ...current]);
         setSelected(id);
-        selectedRef.current = id;
-        setRun({ status: "pending", startedAt: Date.now(), mode: "generate" });
+        setInFlightId(id);
         window.setTimeout(() => {
-          const done: HistoryCard = { ...pending, status: "succeeded", thumbUrl: night };
-          setHistory((current) => current.map((item) => (item.id === id ? done : item)));
-          if (generation.current === token && selectedRef.current === id) setRun(successRun(done));
-        }, 900);
+          setHistory((current) => current.map((item) => (item.id === id ? { ...pending, status: "succeeded", thumbUrl: night } : item)));
+          setInFlightId(null);
+        }, 2500);
       }}
     />
     <CropDialog
